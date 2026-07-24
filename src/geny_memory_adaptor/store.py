@@ -77,6 +77,14 @@ class Store:
         if "trust_updated" not in cols:
             self._conn.execute(
                 "ALTER TABLE nodes ADD COLUMN trust_updated REAL DEFAULT 0")
+        if "content_sha" not in cols:
+            # Idempotence key for index(): digest of everything that affects
+            # derived state. Lets a re-index of UNCHANGED content short-circuit
+            # to a metadata touch instead of a full tokenize+embed+edges+fsync
+            # transaction (the difference between a session wake that re-scans
+            # its vault in milliseconds vs minutes).
+            self._conn.execute(
+                "ALTER TABLE nodes ADD COLUMN content_sha TEXT DEFAULT ''")
 
     # ── transactional write helper ───────────────────────────────────
     def _write(self, fn) -> Any:
@@ -109,6 +117,12 @@ class Store:
             (node_id, kind, title, json.dumps(list(tags), ensure_ascii=False),
              text_len, updated_at, int(pinned), importance)))
 
+    def touch_node(self, node_id: str, updated_at: float) -> None:
+        """Refresh a node's updated_at without touching derived state — the
+        cheap path for a re-index whose content is byte-identical."""
+        self._write(lambda c: c.execute(
+            "UPDATE nodes SET updated_at=? WHERE id=?", (updated_at, node_id)))
+
     def index_atomic(
         self, node_id: str, *, kind: str, title: str, tags: Sequence[str],
         text_len: int, updated_at: float, pinned: bool, importance: float,
@@ -116,6 +130,7 @@ class Store:
         edges: Sequence[Tuple[int, Sequence[Tuple[str, float]]]],
         teacher: Optional[Tuple[str, bytes, int]] = None,
         text_param: Optional[Tuple[str, bytes]] = None,
+        content_sha: str = "",
     ) -> None:
         """Write one memory's node + postings + vector + edges (+ optional
         teacher / distill-text) in a SINGLE transaction, so a mid-index failure
@@ -125,13 +140,14 @@ class Store:
 
         def _do(c):
             c.execute(
-                "INSERT INTO nodes(id,kind,title,tags,text_len,updated_at,pinned,importance)"
-                " VALUES(?,?,?,?,?,?,?,?)"
+                "INSERT INTO nodes(id,kind,title,tags,text_len,updated_at,pinned,importance,content_sha)"
+                " VALUES(?,?,?,?,?,?,?,?,?)"
                 " ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,title=excluded.title,"
                 " tags=excluded.tags,text_len=excluded.text_len,updated_at=excluded.updated_at,"
-                " pinned=excluded.pinned,importance=excluded.importance",
+                " pinned=excluded.pinned,importance=excluded.importance,"
+                " content_sha=excluded.content_sha",
                 (node_id, kind, title, json.dumps(list(tags), ensure_ascii=False),
-                 text_len, updated_at, int(pinned), importance))
+                 text_len, updated_at, int(pinned), importance, content_sha))
             c.execute("DELETE FROM postings WHERE node_id=?", (node_id,))
             c.executemany(
                 "INSERT OR REPLACE INTO postings(term,node_id,tf) VALUES(?,?,?)",
@@ -153,7 +169,7 @@ class Store:
         self._write(_do)
 
     _NODE_COLS = ("id,kind,title,tags,text_len,updated_at,access_count,last_access,"
-                  "pinned,importance,trust,trust_updated")
+                  "pinned,importance,trust,trust_updated,content_sha")
 
     def get_node(self, node_id: str) -> Optional[Dict[str, Any]]:
         rows = self._read(
@@ -180,6 +196,7 @@ class Store:
             "last_access": r[7], "pinned": bool(r[8]), "importance": r[9],
             "trust": 0.5 if r[10] is None else float(r[10]),
             "trust_updated": float(r[11] or 0.0),
+            "content_sha": r[12] or "",
         }
 
     def set_trust(self, node_id: str, trust: float, ts: float) -> None:

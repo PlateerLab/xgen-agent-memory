@@ -884,3 +884,65 @@ def test_join_reaches_through_graph_links():
     assert "impl" in ids, f"link-mediated membership missed: {ids}"
     if "lonely" in ids:
         assert ids.index("impl") < ids.index("lonely")
+
+
+# ── 1.5.1: idempotent re-index short-circuit (wake-time backfill fix) ─
+
+
+def test_reindex_unchanged_short_circuits_and_is_fast():
+    """EFFECT PROOF: re-indexing byte-identical content must skip the full
+    tokenize+embed+edges+transaction path — the difference between a session
+    wake that re-scans its vault in milliseconds vs minutes (2026-07-25 prod:
+    124s wakes from a full-vault backfill on every resume)."""
+    import time as _t
+    mem = make_mem()
+    docs = [(f"n{i}", f"노트 {i} 본문 " + "내용 " * 120) for i in range(60)]
+
+    t0 = _t.perf_counter()
+    for nid, body in docs:
+        mem.index(nid, body, kind="note")
+    first = _t.perf_counter() - t0
+
+    t0 = _t.perf_counter()
+    for nid, body in docs:
+        mem.index(nid, body, kind="note")   # identical → must short-circuit
+    second = _t.perf_counter() - t0
+
+    assert second < first / 10, \
+        f"unchanged re-index must be ≥10× faster (first={first*1000:.0f}ms, second={second*1000:.0f}ms)"
+    # ranking still works after the no-op pass
+    assert mem.search("노트 30 본문", top_k=3)
+
+
+def test_reindex_changed_content_still_reindexes():
+    mem = make_mem()
+    mem.index("a", "김치찌개 레시피", kind="note")
+    assert mem.search("김치찌개", top_k=2)
+    mem.index("a", "리듬게임 판정 가이드", kind="note")   # changed body
+    ids = [h.id for h in mem.search("리듬게임 판정", top_k=2)]
+    assert "a" in ids
+    # old content no longer matches
+    old = mem.search("김치찌개", top_k=2)
+    assert not old or old[0].score < 1.0
+
+
+def test_reindex_metadata_changes_are_not_skipped():
+    """Tags/links/importance/pinned feed derived state (edges, features) —
+    changing ONLY them must still reindex, not short-circuit."""
+    mem = make_mem()
+    mem.index("x", "본문 동일", tags=["a"], kind="note")
+    sha1 = mem.store.get_node("x")["content_sha"]
+    mem.index("x", "본문 동일", tags=["a", "b"], kind="note")
+    sha2 = mem.store.get_node("x")["content_sha"]
+    assert sha1 != sha2
+    mem.index("x", "본문 동일", tags=["a", "b"], kind="note", pinned=True)
+    assert mem.store.get_node("x")["content_sha"] != sha2
+
+
+def test_reindex_unchanged_touches_updated_at_only():
+    mem = make_mem()
+    mem.index("t", "본문", kind="note", updated_at=100.0)
+    assert mem.store.get_node("t")["updated_at"] == 100.0
+    mem.index("t", "본문", kind="note", updated_at=200.0)  # same content, new ts
+    node = mem.store.get_node("t")
+    assert node["updated_at"] == 200.0  # recency refreshed without re-embed

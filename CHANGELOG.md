@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.5.1] — 2026-07-25
+
+### Fixed (wake-time backfill: idempotent re-index)
+- `index()` now short-circuits when NOTHING affecting derived state changed:
+  a `content_sha` digest (body, kind, tags, links, importance, pinned, config
+  geometry, teacher presence) is stored per node; a matching re-index skips
+  tokenize+embed+edge-derivation+fsync entirely and only refreshes
+  `updated_at` (recency) when the caller passed a new timestamp. Hosts that
+  re-scan their whole vault on session wake (Geny's resume backfill measured
+  124s on a real vault) drop to a hash-compare per note. Effect-gated:
+  unchanged re-index ≥10× faster in tests; metadata-only changes (tags/links/
+  pinned/importance) still reindex; changed bodies still reindex. Migration:
+  idempotent `ADD COLUMN content_sha` (legacy rows have '' → first re-index
+  rebuilds and stamps them).
+
 ## [1.5.0] — 2026-07-23
 
 Memory governance — three systemic (no-LLM) mechanisms, each gated on an

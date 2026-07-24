@@ -138,6 +138,25 @@ class SynapseMemory:
         with self._lock:
             existing = self.store.get_node(node_id)  # None ⇒ fresh insert
             body = f"{title}\n{text}" if title else text
+            # Idempotence short-circuit: hosts commonly re-scan their whole
+            # vault on session wake ("index everything, just in case"). When
+            # NOTHING that affects derived state changed, a full re-index
+            # (tokenize + embed + edge derivation + fsync'd transaction) is
+            # pure waste — measured as the difference between a wake-time
+            # backfill of a real vault taking minutes vs milliseconds. The
+            # digest covers every input the derived rows depend on, config
+            # geometry included (a dim/vocab change must rebuild vectors).
+            sha_basis = "\x1f".join((
+                body, kind, ",".join(sorted(tags)), ",".join(sorted(links)),
+                f"{importance:.6f}", str(bool(pinned)),
+                f"{self.cfg.dim}:{self.cfg.vocab_size}",
+                str(teacher_model) if teacher_vec is not None else "",
+            ))
+            content_sha = hashlib.sha1(sha_basis.encode("utf-8", "replace")).hexdigest()
+            if existing is not None and existing.get("content_sha") == content_sha:
+                if updated_at is not None and updated_at != existing.get("updated_at"):
+                    self.store.touch_node(node_id, updated_at)
+                return
             # ── compute everything FIRST (reads + numpy), commit ONCE ──
             # LEXICAL stream → BM25 postings (words + stems + syllable bigrams
             # + cross-space bigrams). The jamo-augmented EMBEDDING stream lives
@@ -176,7 +195,7 @@ class SynapseMemory:
                 tf=tf, vec=pack_vec(vec), dim=self.cfg.dim,
                 edges=[(EDGE_LINK, [(dst, 1.0) for dst in links]),
                        (EDGE_TAG, tag_edges), (EDGE_KNN, knn_edges)],
-                teacher=teacher, text_param=text_param)
+                teacher=teacher, text_param=text_param, content_sha=content_sha)
 
             # ── cache maintenance (after the commit succeeds) ──
             if self._vec_cache is not None:
