@@ -946,3 +946,106 @@ def test_reindex_unchanged_touches_updated_at_only():
     mem.index("t", "본문", kind="note", updated_at=200.0)  # same content, new ts
     node = mem.store.get_node("t")
     assert node["updated_at"] == 200.0  # recency refreshed without re-embed
+
+
+# ── 1.6.0: integer-keyed postings (storage-bloat fix) ─────────────────
+
+
+def _long_id(i: int) -> str:
+    # Geny-style node ids: ~70 chars ("Scope.SESSION/conversations/<uuid>/...")
+    return (f"Scope.SESSION/conversations/7a6337e0-f75b-4e9b-8972-91c7bf32179d"
+            f"/2026-07-{i % 28 + 1:02d}-turn-{i}.md")
+
+
+def test_postings_v2_shrinks_db_vs_v1_layout(tmp_path):
+    """EFFECT PROOF: with production-shaped long node ids, the v2 integer
+    postings keep the db a fraction of the v1 layout (prod: 126 MB of a
+    166 MB vault was postings). We rebuild a v1-layout db by hand, migrate,
+    and compare on-disk size."""
+    import sqlite3, os
+    from geny_memory_adaptor.store import Store
+    from geny_memory_adaptor import SynapseMemory, SynapseConfig
+
+    # Term-DIVERSE corpus (real vaults average ~230 unique terms/node): each
+    # doc gets its own vocabulary so postings rows scale like production.
+    def body_for(i: int) -> str:
+        return " ".join(f"항목{i}구역{j} 데이터{(i * 7 + j) % 997}" for j in range(60))
+
+    # v1-layout db built manually (schema as shipped before 1.6.0).
+    v1 = str(tmp_path / "v1.db")
+    c = sqlite3.connect(v1)
+    c.executescript(
+        "CREATE TABLE nodes(id TEXT PRIMARY KEY, kind TEXT DEFAULT 'note',"
+        " title TEXT DEFAULT '', tags TEXT DEFAULT '[]', text_len INT DEFAULT 0,"
+        " updated_at REAL, access_count INT DEFAULT 0, last_access REAL DEFAULT 0,"
+        " pinned INT DEFAULT 0, importance REAL DEFAULT 1.0);"
+        "CREATE TABLE postings(term TEXT, node_id TEXT, tf REAL,"
+        " PRIMARY KEY(term, node_id)) WITHOUT ROWID;"
+        "CREATE INDEX idx_postings_node ON postings(node_id);")
+    from geny_memory_adaptor.tokenizer import lexical_tokens
+    from geny_memory_adaptor.bm25 import term_frequencies
+    for i in range(300):
+        nid = _long_id(i)
+        tf = term_frequencies(lexical_tokens(body_for(i)))
+        c.execute("INSERT INTO nodes(id, text_len, updated_at) VALUES(?,?,0)",
+                  (nid, len(tf)))
+        c.executemany("INSERT INTO postings(term,node_id,tf) VALUES(?,?,?)",
+                      [(t, nid, f) for t, f in tf.items()])
+    c.commit(); c.close()
+    v1_size = os.path.getsize(v1)
+
+    # Open through Store → auto-migrates to v2 + VACUUM.
+    st = Store(v1)
+    v2_size = os.path.getsize(v1)
+    assert v2_size < v1_size * 0.55, \
+        f"v2 must at least halve the db (v1={v1_size//1024}KB v2={v2_size//1024}KB)"
+    # postings still answer identically through the public API
+    sample = st.postings_for_terms(["항목0구역0"])
+    assert sample and len(sample["항목0구역0"]) == 1
+    assert sample["항목0구역0"][0][0] == _long_id(0)
+    total = st._read("SELECT COUNT(*) FROM postings_v2")[0][0]
+    assert total > 30_000  # production-scale row count actually migrated
+
+
+def test_migration_preserves_search_results(tmp_path):
+    """Search results BEFORE and AFTER the v1→v2 migration are identical:
+    build a vault on the current engine, dump its postings back to a v1
+    layout, reopen (migrate), and compare ranked ids."""
+    import sqlite3
+    from geny_memory_adaptor import SynapseMemory, SynapseConfig
+
+    db = str(tmp_path / "m.db")
+    mem = SynapseMemory(SynapseConfig(path=db, vocab_size=4096, dim=32, epsilon=0.0))
+    for i, (t, b) in enumerate([
+        ("게임", "리듬게임 판정 콤보 시스템"), ("요리", "김치찌개 돼지고기 레시피"),
+        ("개발", "파이썬 비동기 이벤트루프"), ("혼합", "리듬게임 하면서 김치찌개 먹기")]):
+        mem.index(_long_id(i), b, title=t)
+    before = [h.id for h in mem.search("리듬게임 판정", top_k=4)]
+    mem.close()
+
+    # Downgrade postings to v1 layout in-place.
+    c = sqlite3.connect(db)
+    c.executescript(
+        "CREATE TABLE postings(term TEXT, node_id TEXT, tf REAL,"
+        " PRIMARY KEY(term, node_id)) WITHOUT ROWID;")
+    c.execute("INSERT INTO postings(term,node_id,tf)"
+              " SELECT t.term, m.id, p.tf FROM postings_v2 p"
+              " JOIN terms t ON t.tid=p.tid JOIN node_map m ON m.nid=p.nid")
+    c.executescript("DELETE FROM postings_v2; DELETE FROM terms; DELETE FROM node_map;")
+    c.commit(); c.close()
+
+    mem2 = SynapseMemory(SynapseConfig(path=db, vocab_size=4096, dim=32, epsilon=0.0))
+    after = [h.id for h in mem2.search("리듬게임 판정", top_k=4)]
+    assert after == before, f"migration changed ranking: {before} → {after}"
+
+
+def test_postings_v2_remove_cleans_map(tmp_path):
+    from geny_memory_adaptor import SynapseMemory, SynapseConfig
+    mem = SynapseMemory(SynapseConfig(path=str(tmp_path / "r.db"),
+                                      vocab_size=4096, dim=32, epsilon=0.0))
+    mem.index(_long_id(1), "삭제될 노트 본문")
+    assert mem.store.postings_for_terms(["삭제될"])
+    mem.remove(_long_id(1))
+    assert not mem.store.postings_for_terms(["삭제될"])
+    assert mem.store._read("SELECT COUNT(*) FROM node_map")[0][0] == 0
+    assert mem.store._read("SELECT COUNT(*) FROM postings_v2")[0][0] == 0

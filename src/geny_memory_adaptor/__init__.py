@@ -18,7 +18,7 @@ from .engine import SearchHit, SynapseMemory
 from .executor_adapter import SynapseRetriever, SynapseVectorHandle
 from .ranker import FEATURES
 
-__version__ = "1.5.1"
+__version__ = "1.6.0"
 
 __all__ = [
     "SynapseMemory",

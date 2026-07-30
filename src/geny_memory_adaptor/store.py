@@ -27,10 +27,16 @@ CREATE TABLE IF NOT EXISTS nodes(
   access_count INT DEFAULT 0, last_access REAL DEFAULT 0,
   pinned INT DEFAULT 0, importance REAL DEFAULT 1.0
 );
-CREATE TABLE IF NOT EXISTS postings(
-  term TEXT, node_id TEXT, tf REAL, PRIMARY KEY(term, node_id)
+CREATE TABLE IF NOT EXISTS terms(
+  tid INTEGER PRIMARY KEY, term TEXT UNIQUE
+);
+CREATE TABLE IF NOT EXISTS node_map(
+  nid INTEGER PRIMARY KEY, id TEXT UNIQUE
+);
+CREATE TABLE IF NOT EXISTS postings_v2(
+  tid INT, nid INT, tf REAL, PRIMARY KEY(tid, nid)
 ) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS idx_postings_node ON postings(node_id);
+CREATE INDEX IF NOT EXISTS idx_postings_v2_nid ON postings_v2(nid);
 CREATE TABLE IF NOT EXISTS vectors(node_id TEXT PRIMARY KEY, dim INT, vec BLOB);
 CREATE TABLE IF NOT EXISTS teacher_vecs(node_id TEXT PRIMARY KEY, model TEXT, dim INT, vec BLOB);
 CREATE TABLE IF NOT EXISTS edges(
@@ -63,6 +69,15 @@ class Store:
             self._conn.executescript(_SCHEMA)
             self._migrate()
             self._conn.commit()
+            if getattr(self, "_needs_vacuum", False):
+                # Outside the transaction; one-time after the v1→v2 rebuild.
+                # In WAL mode the rebuilt pages land in the -wal file — the
+                # TRUNCATE checkpoint folds them back so the main file
+                # actually shrinks on disk (a bare VACUUM leaves the old-size
+                # main file + a fat WAL until some later checkpoint).
+                self._conn.execute("VACUUM")
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                self._needs_vacuum = False
 
     def _migrate(self) -> None:
         """Idempotent column additions for DBs created by older versions.
@@ -77,6 +92,29 @@ class Store:
         if "trust_updated" not in cols:
             self._conn.execute(
                 "ALTER TABLE nodes ADD COLUMN trust_updated REAL DEFAULT 0")
+        # postings v1 (term TEXT, node_id TEXT) → v2 (integer ids). The v1
+        # layout repeated the FULL node-id string (~70 chars in Geny) once per
+        # term per node AND again in the secondary index — measured 126 MB of
+        # a 166 MB production vault. v2 interns terms and node ids once and
+        # keys postings by integers (~10× smaller). One-time rebuild; VACUUM
+        # afterwards reclaims the file.
+        tables = {r[0] for r in self._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        self._needs_vacuum = False
+        if "postings" in tables:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO terms(term) SELECT DISTINCT term FROM postings")
+            self._conn.execute(
+                "INSERT OR IGNORE INTO node_map(id) SELECT DISTINCT node_id FROM postings")
+            self._conn.execute(
+                "INSERT OR REPLACE INTO postings_v2(tid,nid,tf)"
+                " SELECT t.tid, m.nid, p.tf FROM postings p"
+                " JOIN terms t ON t.term = p.term"
+                " JOIN node_map m ON m.id = p.node_id")
+            self._conn.execute("DROP TABLE postings")
+            self._conn.execute("DROP INDEX IF EXISTS idx_postings_node")
+            self._needs_vacuum = True
+
         if "content_sha" not in cols:
             # Idempotence key for index(): digest of everything that affects
             # derived state. Lets a re-index of UNCHANGED content short-circuit
@@ -148,10 +186,12 @@ class Store:
                 " content_sha=excluded.content_sha",
                 (node_id, kind, title, json.dumps(list(tags), ensure_ascii=False),
                  text_len, updated_at, int(pinned), importance, content_sha))
-            c.execute("DELETE FROM postings WHERE node_id=?", (node_id,))
+            nid = self._intern_nid(c, node_id)
+            c.execute("DELETE FROM postings_v2 WHERE nid=?", (nid,))
+            tids = self._intern_tids(c, list(tf.keys()))
             c.executemany(
-                "INSERT OR REPLACE INTO postings(term,node_id,tf) VALUES(?,?,?)",
-                [(t, node_id, f) for t, f in tf.items()])
+                "INSERT OR REPLACE INTO postings_v2(tid,nid,tf) VALUES(?,?,?)",
+                [(tids[t], nid, f) for t, f in tf.items()])
             c.execute("INSERT OR REPLACE INTO vectors(node_id,dim,vec) VALUES(?,?,?)",
                       (node_id, dim, vec))
             for etype, rows in edges:
@@ -206,8 +246,12 @@ class Store:
 
     def remove_node(self, node_id: str) -> None:
         def _do(c):
+            row = c.execute("SELECT nid FROM node_map WHERE id=?", (node_id,)).fetchone()
+            if row is not None:
+                c.execute("DELETE FROM postings_v2 WHERE nid=?", (row[0],))
+                c.execute("DELETE FROM node_map WHERE nid=?", (row[0],))
             for sql in (
-                "DELETE FROM nodes WHERE id=?", "DELETE FROM postings WHERE node_id=?",
+                "DELETE FROM nodes WHERE id=?",
                 "DELETE FROM vectors WHERE node_id=?", "DELETE FROM teacher_vecs WHERE node_id=?",
                 "DELETE FROM edges WHERE src=?", "DELETE FROM feedback WHERE node_id=?",
                 "DELETE FROM edges WHERE dst=?",
@@ -224,13 +268,35 @@ class Store:
     def count_nodes(self) -> int:
         return int(self._read("SELECT COUNT(*) FROM nodes")[0][0])
 
-    # ── postings (BM25) ──────────────────────────────────────────────
+    # ── postings (BM25, integer-keyed v2) ────────────────────────────
+    @staticmethod
+    def _intern_nid(c, node_id: str) -> int:
+        c.execute("INSERT OR IGNORE INTO node_map(id) VALUES(?)", (node_id,))
+        return c.execute("SELECT nid FROM node_map WHERE id=?", (node_id,)).fetchone()[0]
+
+    @staticmethod
+    def _intern_tids(c, terms) -> Dict[str, int]:
+        c.executemany("INSERT OR IGNORE INTO terms(term) VALUES(?)",
+                      [(t,) for t in terms])
+        out: Dict[str, int] = {}
+        CHUNK = 500
+        tl = list(terms)
+        for i in range(0, len(tl), CHUNK):
+            chunk = tl[i:i + CHUNK]
+            q = ",".join("?" for _ in chunk)
+            for term, tid in c.execute(
+                    f"SELECT term, tid FROM terms WHERE term IN ({q})", chunk):
+                out[term] = tid
+        return out
+
     def replace_postings(self, node_id: str, tf: Dict[str, float]) -> None:
         def _do(c):
-            c.execute("DELETE FROM postings WHERE node_id=?", (node_id,))
+            nid = self._intern_nid(c, node_id)
+            c.execute("DELETE FROM postings_v2 WHERE nid=?", (nid,))
+            tids = self._intern_tids(c, list(tf.keys()))
             c.executemany(
-                "INSERT OR REPLACE INTO postings(term,node_id,tf) VALUES(?,?,?)",
-                [(t, node_id, f) for t, f in tf.items()])
+                "INSERT OR REPLACE INTO postings_v2(tid,nid,tf) VALUES(?,?,?)",
+                [(tids[t], nid, f) for t, f in tf.items()])
         self._write(_do)
 
     def postings_for_terms(self, terms: Sequence[str]) -> Dict[str, List[Tuple[str, float]]]:
@@ -239,7 +305,10 @@ class Store:
         q = ",".join("?" for _ in terms)
         out: Dict[str, List[Tuple[str, float]]] = {}
         for term, node_id, tf in self._read(
-                f"SELECT term,node_id,tf FROM postings WHERE term IN ({q})", list(terms)):
+                f"SELECT t.term, m.id, p.tf FROM postings_v2 p"
+                f" JOIN terms t ON t.tid = p.tid"
+                f" JOIN node_map m ON m.nid = p.nid"
+                f" WHERE t.term IN ({q})", list(terms)):
             out.setdefault(term, []).append((node_id, tf))
         return out
 

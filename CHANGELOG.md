@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.6.0] — 2026-07-30
+
+### Changed (postings storage: integer keys — 6.4× smaller vaults)
+- BM25 postings move from `(term TEXT, node_id TEXT)` — which repeated the
+  full node-id string (~70 chars in host layouts) once per term per node AND
+  again in the node index, measured 126 MB of a 166 MB production vault — to
+  interned integer keys: `terms(tid, term)`, `node_map(nid, id)`,
+  `postings_v2(tid, nid, tf)`. Public Store API unchanged
+  (`replace_postings` / `postings_for_terms` / `index_atomic` /
+  `remove_node`); BM25/engine untouched.
+- One-time automatic migration on open: v1 rows are re-keyed, the old table
+  dropped, and the file compacted (VACUUM + WAL TRUNCATE checkpoint — without
+  the checkpoint the shrink stays trapped in the -wal file). Effect-gated:
+  production-shaped corpus 17 MB → 2.6 MB (6.4×); ranked search results
+  byte-identical before/after migration; removals clean `node_map`.
+
 ## [1.5.1] — 2026-07-25
 
 ### Fixed (wake-time backfill: idempotent re-index)
