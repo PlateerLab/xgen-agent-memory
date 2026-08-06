@@ -20,7 +20,7 @@ from typing import List
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from geny_memory_adaptor import SynapseConfig, SynapseMemory  # noqa: E402
+from xgen_agent_memory import SynapseConfig, SynapseMemory  # noqa: E402
 
 _FM = re.compile(r"^---\n(.*?)\n---\n(.*)$", re.DOTALL)
 _LINK = re.compile(r"\[\[([^\]|]+)")

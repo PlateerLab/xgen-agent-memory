@@ -3,8 +3,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "geny-memory-adaptor"
-version = "1.6.0"
+name = "xgen-agent-memory"
+version = "1.7.0"
 description = "Synapse — a learnable, lightweight graph-traversal memory engine: BM25 + local static embeddings + typed-edge PageRank + an online-learned ranker, in one SQLite file with zero API calls."
 readme = "README.md"
 license = "Apache-2.0"
@@ -23,15 +23,15 @@ classifiers = [
 dependencies = ["numpy>=1.24"]
 
 [project.urls]
-Homepage = "https://github.com/CocoRoF/geny-memory-adaptor"
-Repository = "https://github.com/CocoRoF/geny-memory-adaptor"
-Changelog = "https://github.com/CocoRoF/geny-memory-adaptor/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/PlateerLab/xgen-agent-memory"
+Repository = "https://github.com/PlateerLab/xgen-agent-memory"
+Changelog = "https://github.com/PlateerLab/xgen-agent-memory/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.6"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/geny_memory_adaptor"]
+packages = ["src/xgen_agent_memory"]
 
 [tool.ruff]
 line-length = 100
@@ -43,6 +43,6 @@ asyncio_mode = "auto"
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E702", "E701"]
-"src/geny_memory_adaptor/ranker.py" = ["E702"]
-"src/geny_memory_adaptor/embedder.py" = ["E702"]
-"src/geny_memory_adaptor/engine.py" = ["E702"]
+"src/xgen_agent_memory/ranker.py" = ["E702"]
+"src/xgen_agent_memory/embedder.py" = ["E702"]
+"src/xgen_agent_memory/engine.py" = ["E702"]

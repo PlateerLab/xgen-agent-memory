@@ -24,7 +24,7 @@ from typing import Callable, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from geny_memory_adaptor.hangul import (  # noqa: E402
+from xgen_agent_memory.hangul import (  # noqa: E402
     _BASE, is_hangul_syllable,
 )
 

@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from geny_memory_adaptor import SynapseConfig, SynapseMemory  # noqa: E402
+from xgen_agent_memory import SynapseConfig, SynapseMemory  # noqa: E402
 
 # (id, title, body, kind, tags)
 NOTES = [

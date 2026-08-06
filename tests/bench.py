@@ -10,7 +10,7 @@ import time
 
 import numpy as np
 
-from geny_memory_adaptor import SynapseConfig, SynapseMemory
+from xgen_agent_memory import SynapseConfig, SynapseMemory
 
 TOPICS = {
     "게임": ["리듬게임 판정 훈련 기록", "오토파일럿 손 반응 연습", "비트 정확도 통계 정리",

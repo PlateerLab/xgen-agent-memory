@@ -1,4 +1,4 @@
-# geny-memory-adaptor
+# xgen-agent-memory
 
 **Synapse** — a learnable, lightweight graph-traversal memory engine for AI agents.
 
@@ -9,7 +9,7 @@ lives in **one SQLite file**. `numpy` is the only dependency. **Zero API calls,
 zero servers, zero idle cost** — every operation is CPU milliseconds.
 
 ```
-pip install geny-memory-adaptor
+pip install xgen-agent-memory
 ```
 
 ## Why
@@ -28,7 +28,7 @@ constant. Synapse inverts all three:
 ## Quick start
 
 ```python
-from geny_memory_adaptor import SynapseMemory
+from xgen_agent_memory import SynapseMemory
 
 mem = SynapseMemory.open("vault/synapse.db")          # or SynapseMemory.from_env()
 
@@ -58,7 +58,7 @@ Everything is a constructor argument, an environment variable (`GMA_*`), or a
 `.env` file — in that precedence order:
 
 ```python
-from geny_memory_adaptor import SynapseConfig, SynapseMemory
+from xgen_agent_memory import SynapseConfig, SynapseMemory
 mem = SynapseMemory(SynapseConfig(path="synapse.db", dim=256, top_k=8))
 # or
 mem = SynapseMemory.from_env(dotenv=".env")   # GMA_PATH, GMA_DIM, GMA_TOP_K, …
@@ -98,11 +98,11 @@ Design notes:
 
 ## geny-executor integration
 
-`geny_memory_adaptor.executor_adapter` ships duck-typed handles matching
+`xgen_agent_memory.executor_adapter` ships duck-typed handles matching
 geny-executor's memory Protocols (no import of geny-executor):
 
 ```python
-from geny_memory_adaptor import SynapseMemory, SynapseVectorHandle
+from xgen_agent_memory import SynapseMemory, SynapseVectorHandle
 handle = SynapseVectorHandle(SynapseMemory.open("vault/synapse.db"))
 # → FileMemoryProvider(vector_store=handle)  # drop-in local vector layer
 ```

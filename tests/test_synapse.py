@@ -5,18 +5,18 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from geny_memory_adaptor import (
+from xgen_agent_memory import (
     FEATURES,
     SynapseConfig,
     SynapseMemory,
     SynapseVectorHandle,
 )
-from geny_memory_adaptor.bm25 import bm25_scores, term_frequencies
-from geny_memory_adaptor.embedder import HashEmbedder
-from geny_memory_adaptor.graph import personalized_pagerank
-from geny_memory_adaptor.ranker import OnlineRanker
-from geny_memory_adaptor.store import Store
-from geny_memory_adaptor.tokenizer import fnv1a, tokenize
+from xgen_agent_memory.bm25 import bm25_scores, term_frequencies
+from xgen_agent_memory.embedder import HashEmbedder
+from xgen_agent_memory.graph import personalized_pagerank
+from xgen_agent_memory.ranker import OnlineRanker
+from xgen_agent_memory.store import Store
+from xgen_agent_memory.tokenizer import fnv1a, tokenize
 
 
 def make_mem(**kw) -> SynapseMemory:
@@ -108,7 +108,7 @@ def test_embedder_roundtrip():
 # ── graph ────────────────────────────────────────────────────────────
 
 def test_ppr_prefers_linked_neighbourhood():
-    from geny_memory_adaptor.graph import build_adjacency
+    from xgen_agent_memory.graph import build_adjacency
 
     adj = build_adjacency([("a", "b", 1.0), ("b", "a", 1.0), ("b", "c", 1.0), ("x", "y", 1.0)])
     rank = personalized_pagerank(adj, {"a": 1.0})
@@ -351,7 +351,7 @@ def test_feedback_does_not_persist_embedder():
 
 def test_reindex_changed_links_no_dangling_edge():
     """A1: dropping a node's link must not leave a reverse edge behind."""
-    from geny_memory_adaptor.store import EDGE_LINK
+    from xgen_agent_memory.store import EDGE_LINK
     mem = make_mem()
     mem.index("n2", "메모 둘 내용")
     mem.index("n1", "메모 하나 내용", links=["n2"])
@@ -403,7 +403,7 @@ def test_store_text_false_stores_nothing():
 def test_store_rollback_leaves_no_partial_write():
     """B3: a failing multi-statement write rolls back, and the next write's
     commit does not persist the partial state."""
-    from geny_memory_adaptor.store import Store
+    from xgen_agent_memory.store import Store
     s = Store(":memory:")
     s.upsert_node("a", kind="note", title="", tags=[], text_len=1,
                   updated_at=0, pinned=False, importance=1.0)
@@ -454,8 +454,8 @@ def test_concurrent_search_index_feedback_no_crash():
 def test_mutual_link_not_double_weighted():
     """Final review: LINK symmetrization must dedup a mutual link (A↔B), else
     PPR over-weights it vs one-way links."""
-    from geny_memory_adaptor.graph import build_type_adjacency
-    from geny_memory_adaptor.store import EDGE_LINK
+    from xgen_agent_memory.graph import build_type_adjacency
+    from xgen_agent_memory.store import EDGE_LINK
     adj = build_type_adjacency(
         [("A", "B", 1.0, 0.0), ("B", "A", 1.0, 0.0)], EDGE_LINK)
     assert adj["A"] == [("B", 1.0)] and adj["B"] == [("A", 1.0)]  # no dup
@@ -574,7 +574,7 @@ def test_knn_sample_cap_keeps_indexing_bounded():
     per = (time.perf_counter() - t0) / 200 * 1000
     assert per < 20  # flat, not growing with corpus size
     # still produces knn edges (from the capped sample)
-    from geny_memory_adaptor.store import EDGE_KNN
+    from xgen_agent_memory.store import EDGE_KNN
     assert len(mem.store.edges_by_type(EDGE_KNN)) > 0
 
 
@@ -632,7 +632,7 @@ def test_learn_direct_features_opens_gate_and_is_crossturn_safe():
 
 
 def test_learn_direct_gate_shut_on_noise_and_hebbian_forms():
-    from geny_memory_adaptor.store import EDGE_COACCESS
+    from xgen_agent_memory.store import EDGE_COACCESS
     mem = make_mem(blend_min_events=40)
     rng = np.random.default_rng(5)
     n = len(FEATURES)
@@ -744,7 +744,7 @@ def test_trust_migration_from_pre_1_5_db(tmp_path):
     conn.execute("INSERT INTO nodes(id, updated_at) VALUES('legacy', 0)")
     conn.commit(); conn.close()
 
-    from geny_memory_adaptor.store import Store
+    from xgen_agent_memory.store import Store
     st = Store(dbp)
     node = st.get_node("legacy")
     assert node is not None
@@ -963,8 +963,8 @@ def test_postings_v2_shrinks_db_vs_v1_layout(tmp_path):
     166 MB vault was postings). We rebuild a v1-layout db by hand, migrate,
     and compare on-disk size."""
     import sqlite3, os
-    from geny_memory_adaptor.store import Store
-    from geny_memory_adaptor import SynapseMemory, SynapseConfig
+    from xgen_agent_memory.store import Store
+    from xgen_agent_memory import SynapseMemory, SynapseConfig
 
     # Term-DIVERSE corpus (real vaults average ~230 unique terms/node): each
     # doc gets its own vocabulary so postings rows scale like production.
@@ -982,8 +982,8 @@ def test_postings_v2_shrinks_db_vs_v1_layout(tmp_path):
         "CREATE TABLE postings(term TEXT, node_id TEXT, tf REAL,"
         " PRIMARY KEY(term, node_id)) WITHOUT ROWID;"
         "CREATE INDEX idx_postings_node ON postings(node_id);")
-    from geny_memory_adaptor.tokenizer import lexical_tokens
-    from geny_memory_adaptor.bm25 import term_frequencies
+    from xgen_agent_memory.tokenizer import lexical_tokens
+    from xgen_agent_memory.bm25 import term_frequencies
     for i in range(300):
         nid = _long_id(i)
         tf = term_frequencies(lexical_tokens(body_for(i)))
@@ -1012,7 +1012,7 @@ def test_migration_preserves_search_results(tmp_path):
     build a vault on the current engine, dump its postings back to a v1
     layout, reopen (migrate), and compare ranked ids."""
     import sqlite3
-    from geny_memory_adaptor import SynapseMemory, SynapseConfig
+    from xgen_agent_memory import SynapseMemory, SynapseConfig
 
     db = str(tmp_path / "m.db")
     mem = SynapseMemory(SynapseConfig(path=db, vocab_size=4096, dim=32, epsilon=0.0))
@@ -1040,7 +1040,7 @@ def test_migration_preserves_search_results(tmp_path):
 
 
 def test_postings_v2_remove_cleans_map(tmp_path):
-    from geny_memory_adaptor import SynapseMemory, SynapseConfig
+    from xgen_agent_memory import SynapseMemory, SynapseConfig
     mem = SynapseMemory(SynapseConfig(path=str(tmp_path / "r.db"),
                                       vocab_size=4096, dim=32, epsilon=0.0))
     mem.index(_long_id(1), "삭제될 노트 본문")

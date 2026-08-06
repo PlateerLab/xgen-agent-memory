@@ -1,10 +1,10 @@
-"""geny-memory-adaptor — Synapse: a learnable, lightweight graph memory engine.
+"""xgen-agent-memory — Synapse: a learnable, lightweight graph memory engine.
 
 Semantic (local static embeddings) + keyword (BM25) + graph traversal
 (typed-edge Personalized PageRank) fused by a tiny online-learned ranker.
 One SQLite file, numpy-only, zero API calls, microsecond learning updates.
 
-    from geny_memory_adaptor import SynapseMemory
+    from xgen_agent_memory import SynapseMemory
 
     mem = SynapseMemory.open("vault/synapse.db")     # or .from_env()
     mem.index("id-1", "text …", title="…", tags=["…"], links=["id-0"])
@@ -18,7 +18,7 @@ from .engine import SearchHit, SynapseMemory
 from .executor_adapter import SynapseRetriever, SynapseVectorHandle
 from .ranker import FEATURES
 
-__version__ = "1.6.0"
+__version__ = "1.7.0"
 
 __all__ = [
     "SynapseMemory",

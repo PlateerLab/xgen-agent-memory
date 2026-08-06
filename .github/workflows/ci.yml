@@ -1,4 +1,4 @@
-name: CI — geny-memory-adaptor (library)
+name: CI — xgen-agent-memory (library)
 
 on:
   workflow_dispatch:

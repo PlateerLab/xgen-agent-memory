@@ -1,0 +1,44 @@
+name: Release wheel
+
+# PyPI 가 아니라 **GitHub Release 자산**으로 wheel 을 낸다.
+# 소비자는 그 wheel 을 vendor/ 에 넣어 쓴다 — 빌드에 인덱스도 git 도 필요 없다.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # PyPI 는 같은 버전 재업로드를 거부해 실수를 막아 준다. Release 자산은
+      # 덮어쓸 수 있으므로 그 안전망을 여기서 대신한다.
+      - name: 태그와 버전이 같은지 확인
+        run: |
+          V=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "v$V" != "${GITHUB_REF_NAME}" ]; then
+            echo "태그 ${GITHUB_REF_NAME} 와 pyproject 버전 v$V 가 다릅니다"; exit 1
+          fi
+
+      - run: pip install build
+      - run: python -m build
+
+      - name: 설치되고 import 되는지 확인
+        run: |
+          pip install dist/*.whl
+          python -c "import ${MODULE}; print('${MODULE}', getattr(${MODULE}, '__version__', '(no __version__)'))"
+        env:
+          MODULE: xgen_agent_memory
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

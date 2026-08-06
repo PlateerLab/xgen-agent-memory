@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from geny_memory_adaptor import SynapseConfig, SynapseMemory
+from xgen_agent_memory import SynapseConfig, SynapseMemory
 
 DATA = Path(__file__).resolve().parents[1] / "eval" / "data"
 

@@ -8,14 +8,14 @@ matching for 활용/조사 변형, 붙여쓰기, and jamo-level typos.
 
 from __future__ import annotations
 
-from geny_memory_adaptor import SynapseConfig, SynapseMemory
-from geny_memory_adaptor.hangul import (
+from xgen_agent_memory import SynapseConfig, SynapseMemory
+from xgen_agent_memory.hangul import (
     has_jongseong,
     normalize,
     strip_suffix,
     to_jamo,
 )
-from geny_memory_adaptor.tokenizer import (
+from xgen_agent_memory.tokenizer import (
     _JAMO_MARK,
     _XSPACE_MARK,
     embed_tokens,
