@@ -29,12 +29,12 @@ MRR_FLOOR = 0.55
 R5_FLOOR = 0.70
 
 
-@pytest.mark.skipif(not (DATA / "corpus.jsonl").is_file(),
-                    reason="eval fixture not present")
+@pytest.mark.skipif(not (DATA / "corpus.jsonl").is_file(), reason="eval fixture not present")
 def test_miracl_ko_quality_floor():
     docs = [json.loads(x) for x in (DATA / "corpus.jsonl").open(encoding="utf-8")]
-    queries = [json.loads(x) for x in
-               (DATA / "queries_clean.jsonl").open(encoding="utf-8")][:N_QUERIES]
+    queries = [json.loads(x) for x in (DATA / "queries_clean.jsonl").open(encoding="utf-8")][
+        :N_QUERIES
+    ]
     positives = defaultdict(set)
     for line in (DATA / "qrels.tsv").open(encoding="utf-8"):
         qid, _, docid, grade = line.split("\t")

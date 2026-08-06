@@ -87,30 +87,32 @@ class Store:
         decay-to-neutral that stops stale reinforcement from ossifying)."""
         cols = {r[1] for r in self._conn.execute("PRAGMA table_info(nodes)")}
         if "trust" not in cols:
-            self._conn.execute(
-                "ALTER TABLE nodes ADD COLUMN trust REAL DEFAULT 0.5")
+            self._conn.execute("ALTER TABLE nodes ADD COLUMN trust REAL DEFAULT 0.5")
         if "trust_updated" not in cols:
-            self._conn.execute(
-                "ALTER TABLE nodes ADD COLUMN trust_updated REAL DEFAULT 0")
+            self._conn.execute("ALTER TABLE nodes ADD COLUMN trust_updated REAL DEFAULT 0")
         # postings v1 (term TEXT, node_id TEXT) → v2 (integer ids). The v1
         # layout repeated the FULL node-id string (~70 chars in Geny) once per
         # term per node AND again in the secondary index — measured 126 MB of
         # a 166 MB production vault. v2 interns terms and node ids once and
         # keys postings by integers (~10× smaller). One-time rebuild; VACUUM
         # afterwards reclaims the file.
-        tables = {r[0] for r in self._conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'")}
+        tables = {
+            r[0] for r in self._conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
         self._needs_vacuum = False
         if "postings" in tables:
             self._conn.execute(
-                "INSERT OR IGNORE INTO terms(term) SELECT DISTINCT term FROM postings")
+                "INSERT OR IGNORE INTO terms(term) SELECT DISTINCT term FROM postings"
+            )
             self._conn.execute(
-                "INSERT OR IGNORE INTO node_map(id) SELECT DISTINCT node_id FROM postings")
+                "INSERT OR IGNORE INTO node_map(id) SELECT DISTINCT node_id FROM postings"
+            )
             self._conn.execute(
                 "INSERT OR REPLACE INTO postings_v2(tid,nid,tf)"
                 " SELECT t.tid, m.nid, p.tf FROM postings p"
                 " JOIN terms t ON t.term = p.term"
-                " JOIN node_map m ON m.id = p.node_id")
+                " JOIN node_map m ON m.id = p.node_id"
+            )
             self._conn.execute("DROP TABLE postings")
             self._conn.execute("DROP INDEX IF EXISTS idx_postings_node")
             self._needs_vacuum = True
@@ -121,8 +123,7 @@ class Store:
             # to a metadata touch instead of a full tokenize+embed+edges+fsync
             # transaction (the difference between a session wake that re-scans
             # its vault in milliseconds vs minutes).
-            self._conn.execute(
-                "ALTER TABLE nodes ADD COLUMN content_sha TEXT DEFAULT ''")
+            self._conn.execute("ALTER TABLE nodes ADD COLUMN content_sha TEXT DEFAULT ''")
 
     # ── transactional write helper ───────────────────────────────────
     def _write(self, fn) -> Any:
@@ -143,28 +144,58 @@ class Store:
 
     # ── nodes ────────────────────────────────────────────────────────
     def upsert_node(
-        self, node_id: str, *, kind: str, title: str, tags: Sequence[str],
-        text_len: int, updated_at: float, pinned: bool, importance: float,
+        self,
+        node_id: str,
+        *,
+        kind: str,
+        title: str,
+        tags: Sequence[str],
+        text_len: int,
+        updated_at: float,
+        pinned: bool,
+        importance: float,
     ) -> None:
-        self._write(lambda c: c.execute(
-            "INSERT INTO nodes(id,kind,title,tags,text_len,updated_at,pinned,importance)"
-            " VALUES(?,?,?,?,?,?,?,?)"
-            " ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,title=excluded.title,"
-            " tags=excluded.tags,text_len=excluded.text_len,updated_at=excluded.updated_at,"
-            " pinned=excluded.pinned,importance=excluded.importance",
-            (node_id, kind, title, json.dumps(list(tags), ensure_ascii=False),
-             text_len, updated_at, int(pinned), importance)))
+        self._write(
+            lambda c: c.execute(
+                "INSERT INTO nodes(id,kind,title,tags,text_len,updated_at,pinned,importance)"
+                " VALUES(?,?,?,?,?,?,?,?)"
+                " ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,title=excluded.title,"
+                " tags=excluded.tags,text_len=excluded.text_len,updated_at=excluded.updated_at,"
+                " pinned=excluded.pinned,importance=excluded.importance",
+                (
+                    node_id,
+                    kind,
+                    title,
+                    json.dumps(list(tags), ensure_ascii=False),
+                    text_len,
+                    updated_at,
+                    int(pinned),
+                    importance,
+                ),
+            )
+        )
 
     def touch_node(self, node_id: str, updated_at: float) -> None:
         """Refresh a node's updated_at without touching derived state — the
         cheap path for a re-index whose content is byte-identical."""
-        self._write(lambda c: c.execute(
-            "UPDATE nodes SET updated_at=? WHERE id=?", (updated_at, node_id)))
+        self._write(
+            lambda c: c.execute("UPDATE nodes SET updated_at=? WHERE id=?", (updated_at, node_id))
+        )
 
     def index_atomic(
-        self, node_id: str, *, kind: str, title: str, tags: Sequence[str],
-        text_len: int, updated_at: float, pinned: bool, importance: float,
-        tf: Dict[str, float], vec: bytes, dim: int,
+        self,
+        node_id: str,
+        *,
+        kind: str,
+        title: str,
+        tags: Sequence[str],
+        text_len: int,
+        updated_at: float,
+        pinned: bool,
+        importance: float,
+        tf: Dict[str, float],
+        vec: bytes,
+        dim: int,
         edges: Sequence[Tuple[int, Sequence[Tuple[str, float]]]],
         teacher: Optional[Tuple[str, bytes, int]] = None,
         text_param: Optional[Tuple[str, bytes]] = None,
@@ -184,36 +215,53 @@ class Store:
                 " tags=excluded.tags,text_len=excluded.text_len,updated_at=excluded.updated_at,"
                 " pinned=excluded.pinned,importance=excluded.importance,"
                 " content_sha=excluded.content_sha",
-                (node_id, kind, title, json.dumps(list(tags), ensure_ascii=False),
-                 text_len, updated_at, int(pinned), importance, content_sha))
+                (
+                    node_id,
+                    kind,
+                    title,
+                    json.dumps(list(tags), ensure_ascii=False),
+                    text_len,
+                    updated_at,
+                    int(pinned),
+                    importance,
+                    content_sha,
+                ),
+            )
             nid = self._intern_nid(c, node_id)
             c.execute("DELETE FROM postings_v2 WHERE nid=?", (nid,))
             tids = self._intern_tids(c, list(tf.keys()))
             c.executemany(
                 "INSERT OR REPLACE INTO postings_v2(tid,nid,tf) VALUES(?,?,?)",
-                [(tids[t], nid, f) for t, f in tf.items()])
-            c.execute("INSERT OR REPLACE INTO vectors(node_id,dim,vec) VALUES(?,?,?)",
-                      (node_id, dim, vec))
+                [(tids[t], nid, f) for t, f in tf.items()],
+            )
+            c.execute(
+                "INSERT OR REPLACE INTO vectors(node_id,dim,vec) VALUES(?,?,?)", (node_id, dim, vec)
+            )
             for etype, rows in edges:
                 c.execute("DELETE FROM edges WHERE src=? AND etype=?", (node_id, etype))
                 c.executemany(
                     "INSERT OR REPLACE INTO edges(src,dst,etype,w,updated) VALUES(?,?,?,?,?)",
-                    [(node_id, d, etype, w, ts) for d, w in rows])
+                    [(node_id, d, etype, w, ts) for d, w in rows],
+                )
             if teacher is not None:
                 model, tvec, tdim = teacher
-                c.execute("INSERT OR REPLACE INTO teacher_vecs(node_id,model,dim,vec)"
-                          " VALUES(?,?,?,?)", (node_id, model, tdim, tvec))
+                c.execute(
+                    "INSERT OR REPLACE INTO teacher_vecs(node_id,model,dim,vec) VALUES(?,?,?,?)",
+                    (node_id, model, tdim, tvec),
+                )
             if text_param is not None:
                 key, blob = text_param
                 c.execute("INSERT OR REPLACE INTO params(key,blob) VALUES(?,?)", (key, blob))
+
         self._write(_do)
 
-    _NODE_COLS = ("id,kind,title,tags,text_len,updated_at,access_count,last_access,"
-                  "pinned,importance,trust,trust_updated,content_sha")
+    _NODE_COLS = (
+        "id,kind,title,tags,text_len,updated_at,access_count,last_access,"
+        "pinned,importance,trust,trust_updated,content_sha"
+    )
 
     def get_node(self, node_id: str) -> Optional[Dict[str, Any]]:
-        rows = self._read(
-            f"SELECT {self._NODE_COLS} FROM nodes WHERE id=?", (node_id,))
+        rows = self._read(f"SELECT {self._NODE_COLS} FROM nodes WHERE id=?", (node_id,))
         return self._node_row(rows[0]) if rows else None
 
     def nodes(self, ids: Optional[Iterable[str]] = None) -> List[Dict[str, Any]]:
@@ -224,25 +272,33 @@ class Store:
         if not ids:
             return []
         q = ",".join("?" for _ in ids)
-        rows = self._read(
-            f"SELECT {self._NODE_COLS} FROM nodes WHERE id IN ({q})", ids)
+        rows = self._read(f"SELECT {self._NODE_COLS} FROM nodes WHERE id IN ({q})", ids)
         return [self._node_row(r) for r in rows]
 
     @staticmethod
     def _node_row(r: Tuple) -> Dict[str, Any]:
         return {
-            "id": r[0], "kind": r[1], "title": r[2], "tags": json.loads(r[3] or "[]"),
-            "text_len": r[4], "updated_at": r[5], "access_count": r[6],
-            "last_access": r[7], "pinned": bool(r[8]), "importance": r[9],
+            "id": r[0],
+            "kind": r[1],
+            "title": r[2],
+            "tags": json.loads(r[3] or "[]"),
+            "text_len": r[4],
+            "updated_at": r[5],
+            "access_count": r[6],
+            "last_access": r[7],
+            "pinned": bool(r[8]),
+            "importance": r[9],
             "trust": 0.5 if r[10] is None else float(r[10]),
             "trust_updated": float(r[11] or 0.0),
             "content_sha": r[12] or "",
         }
 
     def set_trust(self, node_id: str, trust: float, ts: float) -> None:
-        self._write(lambda c: c.execute(
-            "UPDATE nodes SET trust=?, trust_updated=? WHERE id=?",
-            (trust, ts, node_id)))
+        self._write(
+            lambda c: c.execute(
+                "UPDATE nodes SET trust=?, trust_updated=? WHERE id=?", (trust, ts, node_id)
+            )
+        )
 
     def remove_node(self, node_id: str) -> None:
         def _do(c):
@@ -252,18 +308,24 @@ class Store:
                 c.execute("DELETE FROM node_map WHERE nid=?", (row[0],))
             for sql in (
                 "DELETE FROM nodes WHERE id=?",
-                "DELETE FROM vectors WHERE node_id=?", "DELETE FROM teacher_vecs WHERE node_id=?",
-                "DELETE FROM edges WHERE src=?", "DELETE FROM feedback WHERE node_id=?",
+                "DELETE FROM vectors WHERE node_id=?",
+                "DELETE FROM teacher_vecs WHERE node_id=?",
+                "DELETE FROM edges WHERE src=?",
+                "DELETE FROM feedback WHERE node_id=?",
                 "DELETE FROM edges WHERE dst=?",
             ):
                 c.execute(sql, (node_id,))
+
         self._write(_do)
 
     def touch_access(self, ids: Iterable[str], ts: Optional[float] = None) -> None:
         ts = ts or time.time()
         rows = [(ts, i) for i in ids]
-        self._write(lambda c: c.executemany(
-            "UPDATE nodes SET access_count=access_count+1,last_access=? WHERE id=?", rows))
+        self._write(
+            lambda c: c.executemany(
+                "UPDATE nodes SET access_count=access_count+1,last_access=? WHERE id=?", rows
+            )
+        )
 
     def count_nodes(self) -> int:
         return int(self._read("SELECT COUNT(*) FROM nodes")[0][0])
@@ -276,16 +338,14 @@ class Store:
 
     @staticmethod
     def _intern_tids(c, terms) -> Dict[str, int]:
-        c.executemany("INSERT OR IGNORE INTO terms(term) VALUES(?)",
-                      [(t,) for t in terms])
+        c.executemany("INSERT OR IGNORE INTO terms(term) VALUES(?)", [(t,) for t in terms])
         out: Dict[str, int] = {}
         CHUNK = 500
         tl = list(terms)
         for i in range(0, len(tl), CHUNK):
-            chunk = tl[i:i + CHUNK]
+            chunk = tl[i : i + CHUNK]
             q = ",".join("?" for _ in chunk)
-            for term, tid in c.execute(
-                    f"SELECT term, tid FROM terms WHERE term IN ({q})", chunk):
+            for term, tid in c.execute(f"SELECT term, tid FROM terms WHERE term IN ({q})", chunk):
                 out[term] = tid
         return out
 
@@ -296,7 +356,9 @@ class Store:
             tids = self._intern_tids(c, list(tf.keys()))
             c.executemany(
                 "INSERT OR REPLACE INTO postings_v2(tid,nid,tf) VALUES(?,?,?)",
-                [(tids[t], nid, f) for t, f in tf.items()])
+                [(tids[t], nid, f) for t, f in tf.items()],
+            )
+
         self._write(_do)
 
     def postings_for_terms(self, terms: Sequence[str]) -> Dict[str, List[Tuple[str, float]]]:
@@ -305,10 +367,12 @@ class Store:
         q = ",".join("?" for _ in terms)
         out: Dict[str, List[Tuple[str, float]]] = {}
         for term, node_id, tf in self._read(
-                f"SELECT t.term, m.id, p.tf FROM postings_v2 p"
-                f" JOIN terms t ON t.tid = p.tid"
-                f" JOIN node_map m ON m.nid = p.nid"
-                f" WHERE t.term IN ({q})", list(terms)):
+            f"SELECT t.term, m.id, p.tf FROM postings_v2 p"
+            f" JOIN terms t ON t.tid = p.tid"
+            f" JOIN node_map m ON m.nid = p.nid"
+            f" WHERE t.term IN ({q})",
+            list(terms),
+        ):
             out.setdefault(term, []).append((node_id, tf))
         return out
 
@@ -317,9 +381,11 @@ class Store:
 
     # ── vectors ──────────────────────────────────────────────────────
     def put_vector(self, node_id: str, vec: bytes, dim: int) -> None:
-        self._write(lambda c: c.execute(
-            "INSERT OR REPLACE INTO vectors(node_id,dim,vec) VALUES(?,?,?)",
-            (node_id, dim, vec)))
+        self._write(
+            lambda c: c.execute(
+                "INSERT OR REPLACE INTO vectors(node_id,dim,vec) VALUES(?,?,?)", (node_id, dim, vec)
+            )
+        )
 
     def all_vectors(self) -> List[Tuple[str, int, bytes]]:
         return self._read("SELECT node_id,dim,vec FROM vectors")
@@ -330,17 +396,22 @@ class Store:
         """ATOMIC distill swap: replace the embedder param AND re-embed every
         vector in ONE transaction. A crash rolls the whole thing back, so the
         stored table and the vectors it produced are never left inconsistent."""
+
         def _do(c):
-            c.execute("INSERT OR REPLACE INTO params(key,blob) VALUES('embedder',?)",
-                      (embedder_blob,))
-            c.executemany(
-                "INSERT OR REPLACE INTO vectors(node_id,dim,vec) VALUES(?,?,?)", vec_rows)
+            c.execute(
+                "INSERT OR REPLACE INTO params(key,blob) VALUES('embedder',?)", (embedder_blob,)
+            )
+            c.executemany("INSERT OR REPLACE INTO vectors(node_id,dim,vec) VALUES(?,?,?)", vec_rows)
+
         self._write(_do)
 
     def put_teacher(self, node_id: str, model: str, vec: bytes, dim: int) -> None:
-        self._write(lambda c: c.execute(
-            "INSERT OR REPLACE INTO teacher_vecs(node_id,model,dim,vec) VALUES(?,?,?,?)",
-            (node_id, model, dim, vec)))
+        self._write(
+            lambda c: c.execute(
+                "INSERT OR REPLACE INTO teacher_vecs(node_id,model,dim,vec) VALUES(?,?,?,?)",
+                (node_id, model, dim, vec),
+            )
+        )
 
     def teachers(self) -> List[Tuple[str, str, int, bytes]]:
         return self._read("SELECT node_id,model,dim,vec FROM teacher_vecs")
@@ -349,21 +420,26 @@ class Store:
     def upsert_edges(self, rows: Iterable[Tuple[str, str, int, float]]) -> None:
         ts = time.time()
         data = [(s, d, t, w, ts) for s, d, t, w in rows]
-        self._write(lambda c: c.executemany(
-            "INSERT INTO edges(src,dst,etype,w,updated) VALUES(?,?,?,?,?)"
-            " ON CONFLICT(src,dst,etype) DO UPDATE SET w=excluded.w,updated=excluded.updated",
-            data))
+        self._write(
+            lambda c: c.executemany(
+                "INSERT INTO edges(src,dst,etype,w,updated) VALUES(?,?,?,?,?)"
+                " ON CONFLICT(src,dst,etype) DO UPDATE SET w=excluded.w,updated=excluded.updated",
+                data,
+            )
+        )
 
-    def replace_edges_from(self, node_id: str, etype: int,
-                           rows: Iterable[Tuple[str, float]]) -> None:
+    def replace_edges_from(
+        self, node_id: str, etype: int, rows: Iterable[Tuple[str, float]]
+    ) -> None:
         ts = time.time()
         data = [(node_id, d, etype, w, ts) for d, w in rows]
 
         def _do(c):
             c.execute("DELETE FROM edges WHERE src=? AND etype=?", (node_id, etype))
             c.executemany(
-                "INSERT OR REPLACE INTO edges(src,dst,etype,w,updated) VALUES(?,?,?,?,?)",
-                data)
+                "INSERT OR REPLACE INTO edges(src,dst,etype,w,updated) VALUES(?,?,?,?,?)", data
+            )
+
         self._write(_do)
 
     def edges_by_type(self, etype: int) -> List[Tuple[str, str, float, float]]:
@@ -371,7 +447,8 @@ class Store:
 
     def get_edge(self, src: str, dst: str, etype: int) -> Optional[Tuple[float, float]]:
         rows = self._read(
-            "SELECT w,updated FROM edges WHERE src=? AND dst=? AND etype=?", (src, dst, etype))
+            "SELECT w,updated FROM edges WHERE src=? AND dst=? AND etype=?", (src, dst, etype)
+        )
         return (rows[0][0], rows[0][1]) if rows else None
 
     def set_edge(self, src: str, dst: str, etype: int, w: float) -> None:
@@ -380,12 +457,14 @@ class Store:
     def prune_edges(self, etype: int, floor: float) -> int:
         def _do(c):
             return c.execute("DELETE FROM edges WHERE etype=? AND w<?", (etype, floor)).rowcount
+
         return self._write(_do)
 
     # ── params / feedback ────────────────────────────────────────────
     def put_param(self, key: str, blob: bytes) -> None:
-        self._write(lambda c: c.execute(
-            "INSERT OR REPLACE INTO params(key,blob) VALUES(?,?)", (key, blob)))
+        self._write(
+            lambda c: c.execute("INSERT OR REPLACE INTO params(key,blob) VALUES(?,?)", (key, blob))
+        )
 
     def get_param(self, key: str) -> Optional[bytes]:
         rows = self._read("SELECT blob FROM params WHERE key=?", (key,))
@@ -394,22 +473,25 @@ class Store:
     def delete_param(self, key: str) -> None:
         self._write(lambda c: c.execute("DELETE FROM params WHERE key=?", (key,)))
 
-    def add_feedback(self, query_hash: str, node_id: str, features: bytes,
-                     used: bool, label_src: str, cap: int) -> None:
+    def add_feedback(
+        self, query_hash: str, node_id: str, features: bytes, used: bool, label_src: str, cap: int
+    ) -> None:
         def _do(c):
             c.execute(
                 "INSERT INTO feedback(ts,query_hash,node_id,features,shown,used,label_src)"
                 " VALUES(?,?,?,?,1,?,?)",
-                (time.time(), query_hash, node_id, features, int(used), label_src))
+                (time.time(), query_hash, node_id, features, int(used), label_src),
+            )
             c.execute(
-                "DELETE FROM feedback WHERE rowid <= "
-                "(SELECT MAX(rowid) FROM feedback) - ?", (cap,))
+                "DELETE FROM feedback WHERE rowid <= (SELECT MAX(rowid) FROM feedback) - ?", (cap,)
+            )
+
         self._write(_do)
 
     def feedback_rows(self, limit: int) -> List[Tuple[str, bytes, int]]:
         return self._read(
-            "SELECT query_hash,features,used FROM feedback ORDER BY rowid DESC LIMIT ?",
-            (limit,))
+            "SELECT query_hash,features,used FROM feedback ORDER BY rowid DESC LIMIT ?", (limit,)
+        )
 
     def feedback_count(self) -> int:
         return int(self._read("SELECT COUNT(*) FROM feedback")[0][0])

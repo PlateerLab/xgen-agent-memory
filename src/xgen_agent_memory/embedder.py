@@ -26,10 +26,16 @@ from .tokenizer import fnv1a_pair, tokenize
 
 
 class HashEmbedder:
-    def __init__(self, vocab_size: int, dim: int, *, seed: int = 41,
-                 char_ngrams: Sequence[int] = (2, 3),
-                 jamo_ngrams: Sequence[int] = (3, 5),
-                 suffix_strip: bool = True) -> None:
+    def __init__(
+        self,
+        vocab_size: int,
+        dim: int,
+        *,
+        seed: int = 41,
+        char_ngrams: Sequence[int] = (2, 3),
+        jamo_ngrams: Sequence[int] = (3, 5),
+        suffix_strip: bool = True,
+    ) -> None:
         self.vocab_size = vocab_size
         self.dim = dim
         self.char_ngrams = tuple(char_ngrams)
@@ -47,9 +53,13 @@ class HashEmbedder:
         Two independent hash views per token make total collisions ~(1/B)²
         (NeurIPS 2017 hash embeddings) — a single hash over a jamo+syllable
         n-gram vocabulary collides badly at 2^16 buckets."""
-        toks = tokenize(text, char_ngrams=self.char_ngrams,
-                        jamo_ngrams=self.jamo_ngrams,
-                        suffix_strip=self.suffix_strip, limit=limit)
+        toks = tokenize(
+            text,
+            char_ngrams=self.char_ngrams,
+            jamo_ngrams=self.jamo_ngrams,
+            suffix_strip=self.suffix_strip,
+            limit=limit,
+        )
         if not toks:
             return np.zeros((0, 2), dtype=np.int64)
         return np.array([fnv1a_pair(t, self.vocab_size) for t in toks], dtype=np.int64)
@@ -87,8 +97,12 @@ class HashEmbedder:
         caller applies + re-embeds atomically, so a partial distill is never
         persisted. Needs ≥ MIN_DISTILL_PAIRS with a ≥5-item holdout."""
         if len(pairs) < self.MIN_DISTILL_PAIRS:
-            return {"trained": 0.0, "reason_insufficient": 1.0,
-                    "pairs": float(len(pairs)), "candidate": None}
+            return {
+                "trained": 0.0,
+                "reason_insufficient": 1.0,
+                "pairs": float(len(pairs)),
+                "candidate": None,
+            }
         rng = np.random.default_rng(seed)
         idx = rng.permutation(len(pairs))
         n_hold = max(5, int(len(pairs) * holdout))
@@ -102,8 +116,10 @@ class HashEmbedder:
 
         W = self.table.copy()
         P = (rng.standard_normal((d_t, self.dim)) / np.sqrt(self.dim)).astype(np.float32)
-        mW = np.zeros_like(W); vW = np.zeros_like(W)
-        mP = np.zeros_like(P); vP = np.zeros_like(P)
+        mW = np.zeros_like(W)
+        vW = np.zeros_like(W)
+        mP = np.zeros_like(P)
+        vP = np.zeros_like(P)
         b1, b2, eps = 0.9, 0.999, 1e-8
         step = 0
 
@@ -120,10 +136,10 @@ class HashEmbedder:
                     if ids.size == 0:
                         continue
                     e = (W[ids[:, 0]] + W[ids[:, 1]]).mean(axis=0) * 0.5  # (d,)
-                    pred = P @ e                                # (d_t,)
-                    err = pred - teachers[j]                    # (d_t,)
+                    pred = P @ e  # (d_t,)
+                    err = pred - teachers[j]  # (d_t,)
                     gP += np.outer(err, e)
-                    ge = P.T @ err * (0.5 / ids.shape[0])       # (d,)
+                    ge = P.T @ err * (0.5 / ids.shape[0])  # (d,)
                     np.add.at(gW, ids[:, 0], ge)
                     np.add.at(gW, ids[:, 1], ge)
                 scale = 1.0 / max(1, len(chunk))
@@ -131,17 +147,24 @@ class HashEmbedder:
                 gP *= scale
                 step += 1
                 for grad, param, m, v in ((gW, W, mW, vW), (gP, P, mP, vP)):
-                    m *= b1; m += (1 - b1) * grad
-                    v *= b2; v += (1 - b2) * grad * grad
-                    mh = m / (1 - b1 ** step)
-                    vh = v / (1 - b2 ** step)
+                    m *= b1
+                    m += (1 - b1) * grad
+                    v *= b2
+                    v += (1 - b2) * grad * grad
+                    mh = m / (1 - b1**step)
+                    vh = v / (1 - b2**step)
                     param -= lr * mh / (np.sqrt(vh) + eps)
 
         after = self._geometry_corr(hold, W)
         accept = after > before + self.DISTILL_MARGIN
-        return {"trained": 1.0, "corr_before": before, "corr_after": after,
-                "swapped": 1.0 if accept else 0.0, "pairs": float(len(pairs)),
-                "candidate": W if accept else None}
+        return {
+            "trained": 1.0,
+            "corr_before": before,
+            "corr_after": after,
+            "swapped": 1.0 if accept else 0.0,
+            "pairs": float(len(pairs)),
+            "candidate": W if accept else None,
+        }
 
     def _geometry_corr(self, hold: Sequence[Tuple[str, np.ndarray]], table: np.ndarray) -> float:
         """Pearson corr between local and teacher pairwise cosine matrices."""
@@ -159,7 +182,8 @@ class HashEmbedder:
             teach.append(tvec / (np.linalg.norm(tvec) + 1e-9))
         if len(local) < 2:
             return 0.0
-        L = np.stack(local); T = np.stack(teach)
+        L = np.stack(local)
+        T = np.stack(teach)
         sl = (L @ L.T)[np.triu_indices(len(local), k=1)]
         st = (T @ T.T)[np.triu_indices(len(local), k=1)]
         if sl.std() < 1e-9 or st.std() < 1e-9:
@@ -169,19 +193,33 @@ class HashEmbedder:
     # ── persistence ──────────────────────────────────────────────────
     def dumps(self) -> bytes:
         buf = io.BytesIO()
-        np.savez_compressed(buf, table=self.table.astype(np.float16),
-                            meta=np.array([self.vocab_size, self.dim], dtype=np.int64))
+        np.savez_compressed(
+            buf,
+            table=self.table.astype(np.float16),
+            meta=np.array([self.vocab_size, self.dim], dtype=np.int64),
+        )
         return buf.getvalue()
 
     @classmethod
-    def loads(cls, blob: bytes, *, seed: int = 41,
-              char_ngrams: Sequence[int] = (2, 3),
-              jamo_ngrams: Sequence[int] = (3, 5),
-              suffix_strip: bool = True) -> "HashEmbedder":
+    def loads(
+        cls,
+        blob: bytes,
+        *,
+        seed: int = 41,
+        char_ngrams: Sequence[int] = (2, 3),
+        jamo_ngrams: Sequence[int] = (3, 5),
+        suffix_strip: bool = True,
+    ) -> "HashEmbedder":
         data = np.load(io.BytesIO(blob))
         vocab_size, dim = (int(x) for x in data["meta"])
-        emb = cls(vocab_size, dim, seed=seed, char_ngrams=char_ngrams,
-                  jamo_ngrams=jamo_ngrams, suffix_strip=suffix_strip)
+        emb = cls(
+            vocab_size,
+            dim,
+            seed=seed,
+            char_ngrams=char_ngrams,
+            jamo_ngrams=jamo_ngrams,
+            suffix_strip=suffix_strip,
+        )
         emb.table = data["table"].astype(np.float32)
         return emb
 

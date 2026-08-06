@@ -24,11 +24,11 @@ from xgen_agent_memory.tokenizer import (
 
 
 def make_mem(**kw) -> SynapseMemory:
-    return SynapseMemory(SynapseConfig(path=":memory:", vocab_size=8192, dim=32,
-                                       epsilon=0.0, **kw))
+    return SynapseMemory(SynapseConfig(path=":memory:", vocab_size=8192, dim=32, epsilon=0.0, **kw))
 
 
 # ── hangul primitives ────────────────────────────────────────────────
+
 
 def test_jamo_decomposition_exact():
     assert to_jamo("먹었다") == "ㅁㅓㄱㅇㅓㅆㄷㅏ"
@@ -57,6 +57,7 @@ def test_normalize_nfkc_casefold():
 
 # ── guarded 조사 stripping ────────────────────────────────────────────
 
+
 def test_strip_multi_syllable_josa():
     assert strip_suffix("서울에서") == "서울"
     assert strip_suffix("아침부터") == "아침"
@@ -67,22 +68,22 @@ def test_strip_single_josa_requires_batchim_agreement():
     # 을 attaches after 받침 — '실록을' strips, but vowel-final stems keep 을-less forms
     assert strip_suffix("실록을") == "실록"
     assert strip_suffix("판정을") == "판정"
-    assert strip_suffix("게임이") == "게임"     # 받침 'ㅁ' + 이 → strip
-    assert strip_suffix("요리가") == "요리"     # vowel-final + 가 → strip
+    assert strip_suffix("게임이") == "게임"  # 받침 'ㅁ' + 이 → strip
+    assert strip_suffix("요리가") == "요리"  # vowel-final + 가 → strip
     # Agreement VIOLATION → not a particle, keep the word.
-    assert strip_suffix("고향이") == "고향"     # ㅇ received: consonant-final + 이 ok
+    assert strip_suffix("고향이") == "고향"  # ㅇ received: consonant-final + 이 ok
     assert strip_suffix("어디가") == "어디"
 
 
 def test_strip_never_takes_ui_alone():
-    assert strip_suffix("회의") == "회의"      # '의' 단독 스트립 금지
+    assert strip_suffix("회의") == "회의"  # '의' 단독 스트립 금지
     assert strip_suffix("주의") == "주의"
     assert strip_suffix("의사") == "의사"
 
 
 def test_strip_keeps_two_syllable_stems():
-    assert strip_suffix("가게") == "가게"      # ≥2음절 스템 가드
-    assert strip_suffix("나는") == "나는"      # would leave 1 syllable
+    assert strip_suffix("가게") == "가게"  # ≥2음절 스템 가드
+    assert strip_suffix("나는") == "나는"  # would leave 1 syllable
 
 
 def test_strip_hada_family_eomi():
@@ -92,6 +93,7 @@ def test_strip_hada_family_eomi():
 
 
 # ── token streams ────────────────────────────────────────────────────
+
 
 def test_lexical_stream_has_no_jamo():
     toks = lexical_tokens("리듬게임 판정")
@@ -122,7 +124,10 @@ def test_cross_space_bigrams_bridge_word_gap():
 # ── end-to-end Korean robustness ─────────────────────────────────────
 
 CORPUS = {
-    "sillok": ("조선왕조실록", "조선왕조실록은 조선 시대 왕들의 통치 기록이다. 유네스코 세계기록유산으로 등재되어 있다."),
+    "sillok": (
+        "조선왕조실록",
+        "조선왕조실록은 조선 시대 왕들의 통치 기록이다. 유네스코 세계기록유산으로 등재되어 있다.",
+    ),
     "hangul": ("훈민정음", "훈민정음은 세종대왕이 창제한 문자 체계이다."),
     "kimchi": ("김치찌개 조리법", "돼지고기와 묵은지를 넣고 끓이는 한국 요리이다."),
     "docker": ("도커 컨테이너", "docker 컨테이너는 리눅스 네임스페이스로 격리된 프로세스이다."),
@@ -179,6 +184,7 @@ def test_agent_memory_hard_queries():
     mix, 활용 변형. Guards realistic agent retrieval (R@1 ≥ 0.85 floor)."""
     import sys
     from pathlib import Path
+
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "eval"))
     from agent_memory_ko import NOTES, QUERIES
 
@@ -187,8 +193,7 @@ def test_agent_memory_hard_queries():
     mem = SynapseMemory(SynapseConfig(path=":memory:", epsilon=0.0))
     for nid, title, body, kind, tags in NOTES:
         mem.index(nid, body, title=title, kind=kind, tags=tags)
-    at1 = sum(1 for q, gold, _ in QUERIES
-              if (r := mem.search(q, top_k=5)) and r[0].id == gold)
+    at1 = sum(1 for q, gold, _ in QUERIES if (r := mem.search(q, top_k=5)) and r[0].id == gold)
     # R@1 measured 0.95; 0.80 floor absorbs cross-platform embedding jitter
     # while still catching a real regression.
     assert at1 / len(QUERIES) >= 0.80, f"R@1 {at1}/{len(QUERIES)}"
@@ -196,6 +201,6 @@ def test_agent_memory_hard_queries():
 
 def test_strip_ro_after_rieul():
     # 로 attaches after a vowel OR ㄹ-final stem — A4 fix.
-    assert strip_suffix("서울로") == "서울"   # 울: ㄹ 받침 + 로
-    assert strip_suffix("학교로") == "학교"   # vowel + 로
-    assert strip_suffix("집으로") == "집으"   # 으로 is multi-particle → 집 (handled table)
+    assert strip_suffix("서울로") == "서울"  # 울: ㄹ 받침 + 로
+    assert strip_suffix("학교로") == "학교"  # vowel + 로
+    assert strip_suffix("집으로") == "집으"  # 으로 is multi-particle → 집 (handled table)

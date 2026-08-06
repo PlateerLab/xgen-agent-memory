@@ -96,8 +96,7 @@ def lexical_tokens(
                 pos += len(w)
                 boundaries.add(pos - 1)  # bigram starting here spans the gap
             tokens.extend(
-                _XSPACE_MARK + joined[i : i + 2]
-                for i in range(len(joined) - 1) if i in boundaries
+                _XSPACE_MARK + joined[i : i + 2] for i in range(len(joined) - 1) if i in boundaries
             )
         run.clear()
 
@@ -130,9 +129,9 @@ def embed_tokens(
     limit: int = 2048,
 ) -> List[str]:
     """Embedding stream: the lexical stream + padded jamo n-grams."""
-    tokens = lexical_tokens(text, char_ngrams=char_ngrams,
-                            suffix_strip=suffix_strip, cross_space=False,
-                            limit=limit)
+    tokens = lexical_tokens(
+        text, char_ngrams=char_ngrams, suffix_strip=suffix_strip, cross_space=False, limit=limit
+    )
     jamo_sizes = tuple(jamo_ngrams)
     if jamo_sizes:
         for word in _words(text):
@@ -145,12 +144,22 @@ def embed_tokens(
     return tokens[:limit]
 
 
-def tokenize(text: str, *, char_ngrams: Iterable[int] = (2,),
-             jamo_ngrams: Iterable[int] = (3, 5), suffix_strip: bool = True,
-             limit: int = 2048) -> List[str]:
+def tokenize(
+    text: str,
+    *,
+    char_ngrams: Iterable[int] = (2,),
+    jamo_ngrams: Iterable[int] = (3, 5),
+    suffix_strip: bool = True,
+    limit: int = 2048,
+) -> List[str]:
     """Back-compat alias for the embedding stream."""
-    return embed_tokens(text, char_ngrams=char_ngrams, jamo_ngrams=jamo_ngrams,
-                        suffix_strip=suffix_strip, limit=limit)
+    return embed_tokens(
+        text,
+        char_ngrams=char_ngrams,
+        jamo_ngrams=jamo_ngrams,
+        suffix_strip=suffix_strip,
+        limit=limit,
+    )
 
 
 def fnv1a(token: str, buckets: int) -> int:

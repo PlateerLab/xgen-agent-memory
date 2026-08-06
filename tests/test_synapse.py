@@ -20,16 +20,35 @@ from xgen_agent_memory.tokenizer import fnv1a, tokenize
 
 
 def make_mem(**kw) -> SynapseMemory:
-    return SynapseMemory(SynapseConfig(path=":memory:", vocab_size=4096, dim=32,
-                                       epsilon=0.0, **kw))
+    return SynapseMemory(SynapseConfig(path=":memory:", vocab_size=4096, dim=32, epsilon=0.0, **kw))
 
 
 CORPUS = {
-    "game-1": ("리듬게임 판정과 손 반응", "리듬게임에서 판정을 읽는 건 머리보다 손이 먼저다. 오토파일럿 반응 훈련.", ["게임", "리듬"]),
-    "game-2": ("Sayonara Wild Hearts 리뷰", "팝 앨범 한 장을 통째로 플레이하는 리듬게임. 한 시간이면 끝난다.", ["게임", "리듬", "리뷰"]),
-    "cook-1": ("김치찌개 레시피", "돼지고기와 묵은지로 끓이는 김치찌개. 설탕 약간이 포인트.", ["요리"]),
-    "dev-1": ("Python asyncio 디버깅 노트", "이벤트 루프 블로킹을 찾으려면 slow callback 로그를 켠다.", ["개발", "python"]),
-    "dev-2": ("SQLite WAL 모드 정리", "WAL은 동시 읽기에 강하다. 체크포인트 주기에 주의.", ["개발", "db"]),
+    "game-1": (
+        "리듬게임 판정과 손 반응",
+        "리듬게임에서 판정을 읽는 건 머리보다 손이 먼저다. 오토파일럿 반응 훈련.",
+        ["게임", "리듬"],
+    ),
+    "game-2": (
+        "Sayonara Wild Hearts 리뷰",
+        "팝 앨범 한 장을 통째로 플레이하는 리듬게임. 한 시간이면 끝난다.",
+        ["게임", "리듬", "리뷰"],
+    ),
+    "cook-1": (
+        "김치찌개 레시피",
+        "돼지고기와 묵은지로 끓이는 김치찌개. 설탕 약간이 포인트.",
+        ["요리"],
+    ),
+    "dev-1": (
+        "Python asyncio 디버깅 노트",
+        "이벤트 루프 블로킹을 찾으려면 slow callback 로그를 켠다.",
+        ["개발", "python"],
+    ),
+    "dev-2": (
+        "SQLite WAL 모드 정리",
+        "WAL은 동시 읽기에 강하다. 체크포인트 주기에 주의.",
+        ["개발", "db"],
+    ),
 }
 
 
@@ -40,6 +59,7 @@ def seed_corpus(mem: SynapseMemory) -> None:
 
 
 # ── tokenizer ────────────────────────────────────────────────────────
+
 
 def test_tokenizer_korean_ngrams():
     toks = tokenize("리듬게임의 판정")
@@ -54,18 +74,28 @@ def test_tokenizer_english():
 
 # ── bm25 ─────────────────────────────────────────────────────────────
 
+
 def test_bm25_ranks_matching_doc_first():
     store = Store(":memory:")
     for i, text in enumerate(["김치찌개 레시피 요리", "리듬게임 판정 게임", "파이썬 비동기 루프"]):
         toks = tokenize(text)
-        store.upsert_node(f"d{i}", kind="note", title="", tags=[], text_len=len(toks),
-                          updated_at=0, pinned=False, importance=1.0)
+        store.upsert_node(
+            f"d{i}",
+            kind="note",
+            title="",
+            tags=[],
+            text_len=len(toks),
+            updated_at=0,
+            pinned=False,
+            importance=1.0,
+        )
         store.replace_postings(f"d{i}", term_frequencies(toks))
     scores = bm25_scores(store, tokenize("김치찌개 만드는 법"))
     assert max(scores, key=scores.get) == "d0"
 
 
 # ── embedder ─────────────────────────────────────────────────────────
+
 
 def test_embedder_shared_ngrams_give_similarity():
     emb = HashEmbedder(4096, 32)
@@ -85,7 +115,8 @@ def test_embedder_distill_improves_and_gates():
     pairs = []
     for i in range(40):
         cluster = i % 2
-        base = np.zeros(24); base[cluster * 12] = 1.0
+        base = np.zeros(24)
+        base[cluster * 12] = 1.0
         text = f"{words[2 * i]} {words[2 * i + 1]}"
         pairs.append((text, base + rng.normal(0, 0.05, 24)))
     before_table = emb.table.copy()
@@ -107,6 +138,7 @@ def test_embedder_roundtrip():
 
 # ── graph ────────────────────────────────────────────────────────────
 
+
 def test_ppr_prefers_linked_neighbourhood():
     from xgen_agent_memory.graph import build_adjacency
 
@@ -118,21 +150,24 @@ def test_ppr_prefers_linked_neighbourhood():
 
 # ── ranker ───────────────────────────────────────────────────────────
 
+
 def test_ranker_learns_pairwise_and_blend_gates():
     r = OnlineRanker(blend_min_events=50)
     rng = np.random.default_rng(1)
+
     # Ground truth: feature 6 (ppr_co) decides, heuristic barely weighs it.
     def sample(pos: bool):
         x = rng.normal(0, 1, len(FEATURES)).astype(np.float32)
         x[6] = (0.6 if pos else -0.6) + rng.normal(0, 0.4)
         return x
+
     for x in [sample(bool(i % 2)) for i in range(50)]:
         r.observe(x)
     assert r.blend == 0.0  # gate closed before enough events
     losses = []
     for i in range(5000):
         p, n = sample(True), sample(False)
-        if i % 4 == 0:               # 25% held out → referee only (out-of-sample)
+        if i % 4 == 0:  # 25% held out → referee only (out-of-sample)
             r.referee_pair(p, n)
         else:
             losses.append(r.update_pair(p, n))
@@ -146,8 +181,10 @@ def test_ranker_gate_shut_on_pure_noise():
     never opens (the property the query-level holdout guarantees)."""
     r = OnlineRanker(blend_min_events=40)
     rng = np.random.default_rng(2)
+
     def s():
         return rng.normal(0, 1, len(FEATURES)).astype(np.float32)
+
     for _ in range(80):
         r.observe(s())
     for i in range(12000):
@@ -167,7 +204,8 @@ def test_ranker_persistence_roundtrip():
     for _ in range(30):
         a = rng.normal(0, 1, len(FEATURES)).astype(np.float32)
         b = rng.normal(0, 1, len(FEATURES)).astype(np.float32)
-        r.observe(a); r.observe(b)
+        r.observe(a)
+        r.observe(b)
         r.update_pair(a, b)
     r2 = OnlineRanker.loads(r.dumps())
     x = rng.normal(0, 1, len(FEATURES)).astype(np.float32)
@@ -176,6 +214,7 @@ def test_ranker_persistence_roundtrip():
 
 
 # ── engine E2E ───────────────────────────────────────────────────────
+
 
 def test_search_keyword_and_semantic_paths():
     mem = make_mem()
@@ -246,7 +285,8 @@ def test_distill_e2e_reembeds():
     for i in range(40):  # ≥ MIN_DISTILL_PAIRS
         cluster = i % 2
         text = ("리듬 게임 판정 비트 " if cluster == 0 else "김치 요리 레시피 재료 ") + f"메모 {i}"
-        teacher = np.zeros(24); teacher[cluster * 12] = 1.0
+        teacher = np.zeros(24)
+        teacher[cluster * 12] = 1.0
         mem.index(f"n{i}", text, teacher_vec=teacher + rng.normal(0, 0.05, 24))
     m = mem.distill()
     assert m["trained"] == 1.0 and m["pairs"] == 40.0
@@ -256,7 +296,8 @@ def test_distill_e2e_reembeds():
 def test_distill_needs_store_text():
     mem = make_mem(store_text=False)
     for i in range(40):
-        t = np.zeros(8); t[(i % 2) * 4] = 1.0
+        t = np.zeros(8)
+        t[(i % 2) * 4] = 1.0
         mem.index(f"n{i}", f"메모 {i} 내용", teacher_vec=t)
     assert mem.distill().get("reason_no_text") == 1.0  # no re-embeddable corpus
 
@@ -269,9 +310,13 @@ def test_distill_crash_safety_atomic(tmp_path):
     rng = np.random.default_rng(1)
     for i in range(40):
         c = i % 2
-        t = np.zeros(16); t[c * 8] = 1.0
-        mem.index(f"n{i}", ("게임 판정 " if c == 0 else "요리 재료 ") + f"{i}",
-                  teacher_vec=t + rng.normal(0, 0.05, 16))
+        t = np.zeros(16)
+        t[c * 8] = 1.0
+        mem.index(
+            f"n{i}",
+            ("게임 판정 " if c == 0 else "요리 재료 ") + f"{i}",
+            teacher_vec=t + rng.normal(0, 0.05, 16),
+        )
     mem.distill()
     mem.close()
     mem2 = SynapseMemory(SynapseConfig(path=db, vocab_size=4096, dim=32, epsilon=0.0))
@@ -282,6 +327,7 @@ def test_distill_crash_safety_atomic(tmp_path):
 
 
 # ── config / env ─────────────────────────────────────────────────────
+
 
 def test_config_from_env(tmp_path, monkeypatch):
     envfile = tmp_path / ".env"
@@ -296,14 +342,17 @@ def test_config_from_env(tmp_path, monkeypatch):
 
 # ── executor adapter ─────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_vector_handle_shapes():
     mem = make_mem()
     handle = SynapseVectorHandle(mem)
     await handle.index("a", "리듬게임 판정 노트", {"title": "게임", "tags": ["게임"]})
-    await handle.index_batch([
-        {"id": "b", "text": "김치찌개 레시피", "metadata": {"kind": "note"}},
-    ])
+    await handle.index_batch(
+        [
+            {"id": "b", "text": "김치찌개 레시피", "metadata": {"kind": "note"}},
+        ]
+    )
     assert handle.descriptor["api_calls"] == 0
     rows = await handle.search("리듬게임", top_k=2)
     assert rows and rows[0]["id"] == "a" and "query_token" in rows[0]
@@ -322,6 +371,7 @@ def test_blend_gate_resists_label_noise():
         for i in range(6):
             mem.index(f"{t}-{i}", f"{t} 관련 메모 상세 {i}", title=f"{t} {i}", tags=[t])
     import random as _r
+
     rng = _r.Random(0)
     queries = [f"게임 요리 개발 메모 {w}" for w in "가나다라마바사아자차카타파하거너더러머버"]
     for step in range(1500):
@@ -335,6 +385,7 @@ def test_feedback_does_not_persist_embedder():
     """feedback() must persist ONLY the ranker — writing the 32MB embedding
     table every feedback was a 200× slowdown (regression guard)."""
     import time as _t
+
     mem = make_mem()
     for i in range(6):
         mem.index(f"n{i}", f"메모 {i} 내용 기록", title=f"노트 {i}", tags=["x"])
@@ -349,9 +400,11 @@ def test_feedback_does_not_persist_embedder():
 
 # ── review-fix regressions (adversarial pass) ────────────────────────
 
+
 def test_reindex_changed_links_no_dangling_edge():
     """A1: dropping a node's link must not leave a reverse edge behind."""
     from xgen_agent_memory.store import EDGE_LINK
+
     mem = make_mem()
     mem.index("n2", "메모 둘 내용")
     mem.index("n1", "메모 하나 내용", links=["n2"])
@@ -404,9 +457,11 @@ def test_store_rollback_leaves_no_partial_write():
     """B3: a failing multi-statement write rolls back, and the next write's
     commit does not persist the partial state."""
     from xgen_agent_memory.store import Store
+
     s = Store(":memory:")
-    s.upsert_node("a", kind="note", title="", tags=[], text_len=1,
-                  updated_at=0, pinned=False, importance=1.0)
+    s.upsert_node(
+        "a", kind="note", title="", tags=[], text_len=1, updated_at=0, pinned=False, importance=1.0
+    )
     try:
         # executemany with a bad row type raises mid-write.
         s.replace_postings("a", {"ok": 1.0, "bad": object()})  # type: ignore
@@ -424,6 +479,7 @@ def test_concurrent_search_index_feedback_no_crash():
     """B1: hammer one engine from several threads — the lock must prevent the
     'dict changed size' / half-updated-weights races the reviewer found."""
     import threading
+
     mem = make_mem(blend_min_events=10)
     for i in range(30):
         mem.index(f"n{i}", f"게임 판정 메모 {i} 내용", tags=["게임"])
@@ -456,8 +512,8 @@ def test_mutual_link_not_double_weighted():
     PPR over-weights it vs one-way links."""
     from xgen_agent_memory.graph import build_type_adjacency
     from xgen_agent_memory.store import EDGE_LINK
-    adj = build_type_adjacency(
-        [("A", "B", 1.0, 0.0), ("B", "A", 1.0, 0.0)], EDGE_LINK)
+
+    adj = build_type_adjacency([("A", "B", 1.0, 0.0), ("B", "A", 1.0, 0.0)], EDGE_LINK)
     assert adj["A"] == [("B", 1.0)] and adj["B"] == [("A", 1.0)]  # no dup
 
 
@@ -465,19 +521,24 @@ def test_distill_rollback_keeps_embedder_consistent(tmp_path):
     """Final review: a failed store commit during distill must NOT leave the
     in-memory embedder swapped ahead of the on-disk table/vectors."""
     db = str(tmp_path / "d.db")
-    mem = SynapseMemory(SynapseConfig(path=db, vocab_size=2048, dim=16, epsilon=0.0,
-                                      distill_epochs=20, distill_lr=2e-2))
+    mem = SynapseMemory(
+        SynapseConfig(
+            path=db, vocab_size=2048, dim=16, epsilon=0.0, distill_epochs=20, distill_lr=2e-2
+        )
+    )
     rng = np.random.default_rng(3)
     pools = [[f"군집{c}어휘{w}" for w in range(10)] for c in range(3)]
     for i in range(60):
         c = i % 3
         words = rng.choice(pools[c], 3, replace=False)
-        t = np.zeros(24); t[c * 8] = 1.0
+        t = np.zeros(24)
+        t[c * 8] = 1.0
         mem.index(f"n{i}", " ".join(words), teacher_vec=t + rng.normal(0, 0.05, 24))
     before = id(mem.embedder.table)
 
     def boom(*a, **k):
         raise RuntimeError("injected commit failure")
+
     mem.store.swap_embedder_and_vectors = boom  # type: ignore
     try:
         mem.distill()
@@ -517,6 +578,7 @@ def test_giant_wordless_token_is_bounded():
     """Fuzz F1 (HIGH DoS): a megabyte-long space-free token must index/search
     in bounded time — the n-gram + jamo expansion used to OOM."""
     import time
+
     mem = make_mem()
     t0 = time.perf_counter()
     mem.index("blob", "x" * 2_000_000)  # base64/URL/CJK-run shaped
@@ -527,9 +589,17 @@ def test_giant_wordless_token_is_bounded():
 def test_config_validation_rejects_bad_values():
     """Fuzz F2/F3/F5: clear ValueError instead of a cryptic numpy crash or a
     silent NaN-weight poisoning downstream."""
-    for kw in [{"dim": 0}, {"dim": -1}, {"vocab_size": 1}, {"hidden": 0},
-               {"lr": float("inf")}, {"lr": 0.0}, {"l2": float("nan")},
-               {"top_k": 0}, {"epsilon": 2.0}]:
+    for kw in [
+        {"dim": 0},
+        {"dim": -1},
+        {"vocab_size": 1},
+        {"hidden": 0},
+        {"lr": float("inf")},
+        {"lr": 0.0},
+        {"l2": float("nan")},
+        {"top_k": 0},
+        {"epsilon": 2.0},
+    ]:
         with pytest.raises(ValueError):
             SynapseConfig(path=":memory:", **kw)
 
@@ -553,6 +623,7 @@ def test_index_is_atomic_on_failure():
 
     def boom(*a, **k):
         raise RuntimeError("disk full mid-index")
+
     mem.store.index_atomic = boom  # type: ignore
     with pytest.raises(RuntimeError):
         mem.index("orphan", "실패", tags=["x"], teacher_vec=[0.1] * 8)
@@ -565,6 +636,7 @@ def test_knn_sample_cap_keeps_indexing_bounded():
     """Scale-review: with more than sample_cap vectors, a new node's k-NN is
     computed only against the recent slice — per-index cost stays flat."""
     import time
+
     mem = make_mem(knn_sample_cap=200)
     for i in range(200):
         mem.index(f"seed{i}", f"게임 판정 메모 {i}", tags=["게임"])
@@ -575,6 +647,7 @@ def test_knn_sample_cap_keeps_indexing_bounded():
     assert per < 20  # flat, not growing with corpus size
     # still produces knn edges (from the capped sample)
     from xgen_agent_memory.store import EDGE_KNN
+
     assert len(mem.store.edges_by_type(EDGE_KNN)) > 0
 
 
@@ -620,19 +693,19 @@ def test_learn_direct_features_opens_gate_and_is_crossturn_safe():
 
     opened = None
     for step in range(4000):
-        mem.learn(f"q{step}", positives=[("p", mk(True))], negatives=[mk(False)],
-                  label_src="edit")
+        mem.learn(f"q{step}", positives=[("p", mk(True))], negatives=[mk(False)], label_src="edit")
         if opened is None and mem.ranker.blend > 0:
             opened = step
     assert mem.ranker.blend > 0.0, "genuine signal must open the gate"
     assert opened is not None
     p, ng = mk(True), mk(False)
     assert mem.ranker.heuristic(p) < mem.ranker.heuristic(ng)  # heuristic is wrong
-    assert mem.ranker.score(p) > mem.ranker.score(ng)          # learned is right
+    assert mem.ranker.score(p) > mem.ranker.score(ng)  # learned is right
 
 
 def test_learn_direct_gate_shut_on_noise_and_hebbian_forms():
     from xgen_agent_memory.store import EDGE_COACCESS
+
     mem = make_mem(blend_min_events=40)
     rng = np.random.default_rng(5)
     n = len(FEATURES)
@@ -644,7 +717,8 @@ def test_learn_direct_gate_shut_on_noise_and_hebbian_forms():
 
     # Hebbian: two ids confirmed useful TOGETHER get a co-access edge.
     z = np.zeros(n, dtype=np.float32)
-    mem.index("a", "가", kind="note"); mem.index("b", "나", kind="note")
+    mem.index("a", "가", kind="note")
+    mem.index("b", "나", kind="note")
     mem.learn("multi", positives=[("a", z), ("b", z)], negatives=[z], label_src="edit")
     assert mem.store.get_edge("a", "b", EDGE_COACCESS) is not None
     assert mem.store.get_edge("b", "a", EDGE_COACCESS) is not None
@@ -670,12 +744,12 @@ def test_trust_unhelpful_drops_rank_and_helpful_raises():
     assert abs(a0 - b0) < 0.75  # near-tie at neutral trust
 
     for _ in range(3):
-        mem.trust_feedback("b", False)   # −0.10 × 3 → trust 0.2
+        mem.trust_feedback("b", False)  # −0.10 × 3 → trust 0.2
     for _ in range(4):
-        mem.trust_feedback("a", True)    # +0.05 × 4 → trust ≈ 0.7
+        mem.trust_feedback("a", True)  # +0.05 × 4 → trust ≈ 0.7
     a1, b1 = scores()
     assert a1 > b1, "trusted memory must outrank distrusted equal-relevance one"
-    assert (a1 - b1) > (a0 - b0) + 1.0   # the gap is material, not noise
+    assert (a1 - b1) > (a0 - b0) + 1.0  # the gap is material, not noise
     # asymmetry: 3 unhelpful moved b further down than 4 helpful moved a up
     assert (b0 - b1) > (a1 - a0)
 
@@ -685,6 +759,7 @@ def test_trust_decays_to_neutral_anti_ossification():
     re-confirmed fades back toward neutral — stale reinforcement cannot
     permanently pin a memory above equally-relevant peers."""
     import time as _t
+
     mem = make_mem(trust_half_life_days=45.0)
     mem.index("old", "파이썬 비동기 asyncio 이벤트루프", kind="note")
     mem.index("new", "파이썬 비동기 asyncio 이벤트루프", kind="note")
@@ -692,7 +767,7 @@ def test_trust_decays_to_neutral_anti_ossification():
     # Heavy reinforcement of "old", but stamped 90 days in the past.
     past = _t.time() - 90 * 86400
     for _ in range(8):
-        mem.trust_feedback("old", True, now=past)     # → ~0.9, aged 90d
+        mem.trust_feedback("old", True, now=past)  # → ~0.9, aged 90d
     node = mem.store.get_node("old")
     assert node["trust"] > 0.85
     # Effective trust NOW: 2 half-lives → 0.5 + 0.4×0.25 = 0.6
@@ -734,17 +809,21 @@ def test_trust_migration_from_pre_1_5_db(tmp_path):
     """A vault created before the trust columns opens cleanly: columns are
     added, existing rows read as neutral 0.5."""
     import sqlite3
+
     dbp = str(tmp_path / "old.db")
     conn = sqlite3.connect(dbp)
     conn.execute(
         "CREATE TABLE nodes(id TEXT PRIMARY KEY, kind TEXT DEFAULT 'note',"
         " title TEXT DEFAULT '', tags TEXT DEFAULT '[]', text_len INT DEFAULT 0,"
         " updated_at REAL, access_count INT DEFAULT 0, last_access REAL DEFAULT 0,"
-        " pinned INT DEFAULT 0, importance REAL DEFAULT 1.0)")
+        " pinned INT DEFAULT 0, importance REAL DEFAULT 1.0)"
+    )
     conn.execute("INSERT INTO nodes(id, updated_at) VALUES('legacy', 0)")
-    conn.commit(); conn.close()
+    conn.commit()
+    conn.close()
 
     from xgen_agent_memory.store import Store
+
     st = Store(dbp)
     node = st.get_node("legacy")
     assert node is not None
@@ -785,8 +864,9 @@ def test_contradiction_detects_planted_negation_conflicts():
 
     # near-duplicates with the SAME polarity are hygiene-clean
     dup_hits = mem.contradictions("d1")
-    assert all(h["id"] != "d2" for h in dup_hits), \
+    assert all(h["id"] != "d2" for h in dup_hits), (
         f"near-duplicate falsely flagged as contradiction: {dup_hits}"
+    )
 
 
 def test_contradiction_diagnostic_never_mutates():
@@ -813,13 +893,19 @@ def test_contradiction_unknown_or_textless_node_safe():
 def _join_corpus(mem):
     # partial: covers 결제+인증 RICHLY (2 of 3 entities) — additive fusion's
     # favourite. Similar length to `complete` so BM25 length-norm is fair.
-    mem.index("partial", "결제 승인과 결제 취소, 결제 환불, 결제 재시도를 "
-              "인증 토큰 발급, 인증 갱신, 인증 세션 관리와 함께 다루는 결제 인증 심화 문서.",
-              kind="note")
+    mem.index(
+        "partial",
+        "결제 승인과 결제 취소, 결제 환불, 결제 재시도를 "
+        "인증 토큰 발급, 인증 갱신, 인증 세션 관리와 함께 다루는 결제 인증 심화 문서.",
+        kind="note",
+    )
     # complete: touches ALL THREE entities, each only once, similar length.
-    mem.index("complete", "결제 요청 전에 인증 토큰을 검증하고 그 결과를 감사 "
-              "로그 파이프라인에 남기는 연동 지점의 전반 흐름 설계 개요 문서.",
-              kind="note")
+    mem.index(
+        "complete",
+        "결제 요청 전에 인증 토큰을 검증하고 그 결과를 감사 "
+        "로그 파이프라인에 남기는 연동 지점의 전반 흐름 설계 개요 문서.",
+        kind="note",
+    )
     # noise
     mem.index("misc", "리듬게임 콤보 판정 타이밍", kind="note")
 
@@ -842,11 +928,13 @@ def test_join_and_finds_intersection_where_flat_search_fails():
     join = mem.search_join(["결제", "인증", "로그"], mode="and", top_k=4)
 
     # the baseline failure this fixes: flat fusion prefers the 2-of-3-rich doc
-    assert flat and flat[0].id == "partial", \
-        f"corpus no longer demonstrates the flat-search failure: {[(h.id, round(h.score,3)) for h in flat]}"
+    assert flat and flat[0].id == "partial", (
+        f"corpus no longer demonstrates the flat-search failure: {[(h.id, round(h.score, 3)) for h in flat]}"
+    )
     # AND-join gets the intersection right
-    assert join and join[0].id == "complete", \
-        f"AND-join must surface the 3-entity intersection first: {[(h.id, round(h.score,3)) for h in join]}"
+    assert join and join[0].id == "complete", (
+        f"AND-join must surface the 3-entity intersection first: {[(h.id, round(h.score, 3)) for h in join]}"
+    )
     join_rank = {h.id: i for i, h in enumerate(join)}
     if "partial" in join_rank:  # reachable via graph hops at best
         assert join_rank["partial"] > join_rank["complete"]
@@ -862,8 +950,10 @@ def test_join_or_mode_and_validation():
     # AND must be a subset of OR (strictly more selective)
     and_ids = [h.id for h in mem.search_join(["결제", "인증", "로그"], mode="and", top_k=10)]
     assert set(and_ids) <= set(
-        h.id for h in mem.search_join(["결제", "인증", "로그"], mode="or", top_k=10))
+        h.id for h in mem.search_join(["결제", "인증", "로그"], mode="or", top_k=10)
+    )
     import pytest as _pt
+
     with _pt.raises(ValueError):
         mem.search_join(["결제"], mode="xor")
     assert mem.search_join([], mode="and") == []
@@ -875,8 +965,9 @@ def test_join_reaches_through_graph_links():
     explicit LINK to one that does — the graph half of the join."""
     mem = make_mem()
     mem.index("spec", "인증 프로토콜 표준 명세", kind="note")
-    mem.index("impl", "결제 게이트웨이 구현 노트", kind="note",
-              links=["spec"])  # linked to the 인증 doc, never says 인증
+    mem.index(
+        "impl", "결제 게이트웨이 구현 노트", kind="note", links=["spec"]
+    )  # linked to the 인증 doc, never says 인증
     mem.index("lonely", "결제 화면 색상 가이드", kind="note")
 
     hits = mem.search_join(["결제", "인증"], mode="and", top_k=5)
@@ -895,6 +986,7 @@ def test_reindex_unchanged_short_circuits_and_is_fast():
     wake that re-scans its vault in milliseconds vs minutes (2026-07-25 prod:
     124s wakes from a full-vault backfill on every resume)."""
     import time as _t
+
     mem = make_mem()
     docs = [(f"n{i}", f"노트 {i} 본문 " + "내용 " * 120) for i in range(60)]
 
@@ -905,11 +997,12 @@ def test_reindex_unchanged_short_circuits_and_is_fast():
 
     t0 = _t.perf_counter()
     for nid, body in docs:
-        mem.index(nid, body, kind="note")   # identical → must short-circuit
+        mem.index(nid, body, kind="note")  # identical → must short-circuit
     second = _t.perf_counter() - t0
 
-    assert second < first / 10, \
-        f"unchanged re-index must be ≥10× faster (first={first*1000:.0f}ms, second={second*1000:.0f}ms)"
+    assert second < first / 10, (
+        f"unchanged re-index must be ≥10× faster (first={first * 1000:.0f}ms, second={second * 1000:.0f}ms)"
+    )
     # ranking still works after the no-op pass
     assert mem.search("노트 30 본문", top_k=3)
 
@@ -918,7 +1011,7 @@ def test_reindex_changed_content_still_reindexes():
     mem = make_mem()
     mem.index("a", "김치찌개 레시피", kind="note")
     assert mem.search("김치찌개", top_k=2)
-    mem.index("a", "리듬게임 판정 가이드", kind="note")   # changed body
+    mem.index("a", "리듬게임 판정 가이드", kind="note")  # changed body
     ids = [h.id for h in mem.search("리듬게임 판정", top_k=2)]
     assert "a" in ids
     # old content no longer matches
@@ -953,8 +1046,10 @@ def test_reindex_unchanged_touches_updated_at_only():
 
 def _long_id(i: int) -> str:
     # Geny-style node ids: ~70 chars ("Scope.SESSION/conversations/<uuid>/...")
-    return (f"Scope.SESSION/conversations/7a6337e0-f75b-4e9b-8972-91c7bf32179d"
-            f"/2026-07-{i % 28 + 1:02d}-turn-{i}.md")
+    return (
+        f"Scope.SESSION/conversations/7a6337e0-f75b-4e9b-8972-91c7bf32179d"
+        f"/2026-07-{i % 28 + 1:02d}-turn-{i}.md"
+    )
 
 
 def test_postings_v2_shrinks_db_vs_v1_layout(tmp_path):
@@ -962,9 +1057,9 @@ def test_postings_v2_shrinks_db_vs_v1_layout(tmp_path):
     postings keep the db a fraction of the v1 layout (prod: 126 MB of a
     166 MB vault was postings). We rebuild a v1-layout db by hand, migrate,
     and compare on-disk size."""
-    import sqlite3, os
+    import sqlite3
+    import os
     from xgen_agent_memory.store import Store
-    from xgen_agent_memory import SynapseMemory, SynapseConfig
 
     # Term-DIVERSE corpus (real vaults average ~230 unique terms/node): each
     # doc gets its own vocabulary so postings rows scale like production.
@@ -981,24 +1076,29 @@ def test_postings_v2_shrinks_db_vs_v1_layout(tmp_path):
         " pinned INT DEFAULT 0, importance REAL DEFAULT 1.0);"
         "CREATE TABLE postings(term TEXT, node_id TEXT, tf REAL,"
         " PRIMARY KEY(term, node_id)) WITHOUT ROWID;"
-        "CREATE INDEX idx_postings_node ON postings(node_id);")
+        "CREATE INDEX idx_postings_node ON postings(node_id);"
+    )
     from xgen_agent_memory.tokenizer import lexical_tokens
     from xgen_agent_memory.bm25 import term_frequencies
+
     for i in range(300):
         nid = _long_id(i)
         tf = term_frequencies(lexical_tokens(body_for(i)))
-        c.execute("INSERT INTO nodes(id, text_len, updated_at) VALUES(?,?,0)",
-                  (nid, len(tf)))
-        c.executemany("INSERT INTO postings(term,node_id,tf) VALUES(?,?,?)",
-                      [(t, nid, f) for t, f in tf.items()])
-    c.commit(); c.close()
+        c.execute("INSERT INTO nodes(id, text_len, updated_at) VALUES(?,?,0)", (nid, len(tf)))
+        c.executemany(
+            "INSERT INTO postings(term,node_id,tf) VALUES(?,?,?)",
+            [(t, nid, f) for t, f in tf.items()],
+        )
+    c.commit()
+    c.close()
     v1_size = os.path.getsize(v1)
 
     # Open through Store → auto-migrates to v2 + VACUUM.
     st = Store(v1)
     v2_size = os.path.getsize(v1)
-    assert v2_size < v1_size * 0.55, \
-        f"v2 must at least halve the db (v1={v1_size//1024}KB v2={v2_size//1024}KB)"
+    assert v2_size < v1_size * 0.55, (
+        f"v2 must at least halve the db (v1={v1_size // 1024}KB v2={v2_size // 1024}KB)"
+    )
     # postings still answer identically through the public API
     sample = st.postings_for_terms(["항목0구역0"])
     assert sample and len(sample["항목0구역0"]) == 1
@@ -1016,9 +1116,14 @@ def test_migration_preserves_search_results(tmp_path):
 
     db = str(tmp_path / "m.db")
     mem = SynapseMemory(SynapseConfig(path=db, vocab_size=4096, dim=32, epsilon=0.0))
-    for i, (t, b) in enumerate([
-        ("게임", "리듬게임 판정 콤보 시스템"), ("요리", "김치찌개 돼지고기 레시피"),
-        ("개발", "파이썬 비동기 이벤트루프"), ("혼합", "리듬게임 하면서 김치찌개 먹기")]):
+    for i, (t, b) in enumerate(
+        [
+            ("게임", "리듬게임 판정 콤보 시스템"),
+            ("요리", "김치찌개 돼지고기 레시피"),
+            ("개발", "파이썬 비동기 이벤트루프"),
+            ("혼합", "리듬게임 하면서 김치찌개 먹기"),
+        ]
+    ):
         mem.index(_long_id(i), b, title=t)
     before = [h.id for h in mem.search("리듬게임 판정", top_k=4)]
     mem.close()
@@ -1027,12 +1132,16 @@ def test_migration_preserves_search_results(tmp_path):
     c = sqlite3.connect(db)
     c.executescript(
         "CREATE TABLE postings(term TEXT, node_id TEXT, tf REAL,"
-        " PRIMARY KEY(term, node_id)) WITHOUT ROWID;")
-    c.execute("INSERT INTO postings(term,node_id,tf)"
-              " SELECT t.term, m.id, p.tf FROM postings_v2 p"
-              " JOIN terms t ON t.tid=p.tid JOIN node_map m ON m.nid=p.nid")
+        " PRIMARY KEY(term, node_id)) WITHOUT ROWID;"
+    )
+    c.execute(
+        "INSERT INTO postings(term,node_id,tf)"
+        " SELECT t.term, m.id, p.tf FROM postings_v2 p"
+        " JOIN terms t ON t.tid=p.tid JOIN node_map m ON m.nid=p.nid"
+    )
     c.executescript("DELETE FROM postings_v2; DELETE FROM terms; DELETE FROM node_map;")
-    c.commit(); c.close()
+    c.commit()
+    c.close()
 
     mem2 = SynapseMemory(SynapseConfig(path=db, vocab_size=4096, dim=32, epsilon=0.0))
     after = [h.id for h in mem2.search("리듬게임 판정", top_k=4)]
@@ -1041,8 +1150,10 @@ def test_migration_preserves_search_results(tmp_path):
 
 def test_postings_v2_remove_cleans_map(tmp_path):
     from xgen_agent_memory import SynapseMemory, SynapseConfig
-    mem = SynapseMemory(SynapseConfig(path=str(tmp_path / "r.db"),
-                                      vocab_size=4096, dim=32, epsilon=0.0))
+
+    mem = SynapseMemory(
+        SynapseConfig(path=str(tmp_path / "r.db"), vocab_size=4096, dim=32, epsilon=0.0)
+    )
     mem.index(_long_id(1), "삭제될 노트 본문")
     assert mem.store.postings_for_terms(["삭제될"])
     mem.remove(_long_id(1))

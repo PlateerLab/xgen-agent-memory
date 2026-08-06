@@ -19,36 +19,58 @@ from typing import Dict, Optional
 import numpy as np
 
 FEATURES = [
-    "bm25", "cosine", "rrf", "ppr_link", "ppr_tag", "ppr_knn", "ppr_co",
-    "recency", "freq", "importance", "pinned", "title_hit", "kind_prior", "len_norm",
+    "bm25",
+    "cosine",
+    "rrf",
+    "ppr_link",
+    "ppr_tag",
+    "ppr_knn",
+    "ppr_co",
+    "recency",
+    "freq",
+    "importance",
+    "pinned",
+    "title_hit",
+    "kind_prior",
+    "len_norm",
 ]
 N_FEATURES = len(FEATURES)
 
 #: The heuristic floor: fixed weights over z-normalized features (mirrors a
 #: sane hand-tuned engine: semantic + keyword dominate, graph/recency assist).
-_HEURISTIC_W = np.array([
-    1.2,   # bm25 — measured stronger than the undistilled hash cosine on the
-           # MIRACL-ko harness; distillation shifts this balance and the
-           # LEARNED ranker re-weights it per-vault at runtime.
-    0.6,   # cosine
-    0.9,   # rrf
-    0.45,  # ppr_link
-    0.25,  # ppr_tag
-    0.35,  # ppr_knn
-    0.45,  # ppr_co
-    0.30,  # recency
-    0.15,  # freq
-    0.40,  # importance
-    0.50,  # pinned
-    0.35,  # title_hit
-    0.10,  # kind_prior
-    0.05,  # len_norm
-], dtype=np.float32)
+_HEURISTIC_W = np.array(
+    [
+        1.2,  # bm25 — measured stronger than the undistilled hash cosine on the
+        # MIRACL-ko harness; distillation shifts this balance and the
+        # LEARNED ranker re-weights it per-vault at runtime.
+        0.6,  # cosine
+        0.9,  # rrf
+        0.45,  # ppr_link
+        0.25,  # ppr_tag
+        0.35,  # ppr_knn
+        0.45,  # ppr_co
+        0.30,  # recency
+        0.15,  # freq
+        0.40,  # importance
+        0.50,  # pinned
+        0.35,  # title_hit
+        0.10,  # kind_prior
+        0.05,  # len_norm
+    ],
+    dtype=np.float32,
+)
 
 
 class OnlineRanker:
-    def __init__(self, *, hidden: int = 16, lr: float = 0.05, l2: float = 1e-4,
-                 blend_min_events: int = 100, seed: int = 13) -> None:
+    def __init__(
+        self,
+        *,
+        hidden: int = 16,
+        lr: float = 0.05,
+        l2: float = 1e-4,
+        blend_min_events: int = 100,
+        seed: int = 13,
+    ) -> None:
         rng = np.random.default_rng(seed)
         self.lr = lr
         self.l2 = l2
@@ -107,7 +129,7 @@ class OnlineRanker:
     # ── scoring ──────────────────────────────────────────────────────
     @staticmethod
     def _gelu(x: np.ndarray) -> np.ndarray:
-        return 0.5 * x * (1.0 + np.tanh(0.7978845608 * (x + 0.044715 * x ** 3)))
+        return 0.5 * x * (1.0 + np.tanh(0.7978845608 * (x + 0.044715 * x**3)))
 
     def heuristic(self, x: np.ndarray) -> float:
         return float(_HEURISTIC_W @ self._z(x))
@@ -204,8 +226,8 @@ class OnlineRanker:
             gh = gs * self.W2
             pre = z @ self.W1 + self.b1
             # GELU'(x) approx
-            t = np.tanh(0.7978845608 * (pre + 0.044715 * pre ** 3))
-            dg = 0.5 * (1 + t) + 0.5 * pre * (1 - t ** 2) * 0.7978845608 * (1 + 3 * 0.044715 * pre ** 2)
+            t = np.tanh(0.7978845608 * (pre + 0.044715 * pre**3))
+            dg = 0.5 * (1 + t) + 0.5 * pre * (1 - t**2) * 0.7978845608 * (1 + 3 * 0.044715 * pre**2)
             gpre = gh * dg
             gW1 = np.outer(z, gpre)
             gb1 = gpre
@@ -231,14 +253,28 @@ class OnlineRanker:
     def dumps(self) -> bytes:
         buf = io.BytesIO()
         np.savez_compressed(
-            buf, W1=self.W1, b1=self.b1, W2=self.W2, b2=np.float32(self.b2),
-            eW1=self._ema[0], eb1=self._ema[1], eW2=self._ema[2], eb2=np.float32(self._ema[3]),
-            mu=self.mu, var=self.var,
-            meta=json.dumps({
-                "n_norm": self.n_norm, "events": self.events,
-                "disc_b": self.disc_b, "disc_c": self.disc_c,
-                "lr": self.lr, "l2": self.l2, "blend_min_events": self.blend_min_events,
-            }),
+            buf,
+            W1=self.W1,
+            b1=self.b1,
+            W2=self.W2,
+            b2=np.float32(self.b2),
+            eW1=self._ema[0],
+            eb1=self._ema[1],
+            eW2=self._ema[2],
+            eb2=np.float32(self._ema[3]),
+            mu=self.mu,
+            var=self.var,
+            meta=json.dumps(
+                {
+                    "n_norm": self.n_norm,
+                    "events": self.events,
+                    "disc_b": self.disc_b,
+                    "disc_c": self.disc_c,
+                    "lr": self.lr,
+                    "l2": self.l2,
+                    "blend_min_events": self.blend_min_events,
+                }
+            ),
         )
         return buf.getvalue()
 
@@ -246,8 +282,12 @@ class OnlineRanker:
     def loads(cls, blob: bytes) -> "OnlineRanker":
         data = np.load(io.BytesIO(blob), allow_pickle=False)
         meta = json.loads(str(data["meta"]))
-        r = cls(hidden=data["W1"].shape[1], lr=meta["lr"], l2=meta["l2"],
-                blend_min_events=meta["blend_min_events"])
+        r = cls(
+            hidden=data["W1"].shape[1],
+            lr=meta["lr"],
+            l2=meta["l2"],
+            blend_min_events=meta["blend_min_events"],
+        )
         r.W1, r.b1, r.W2, r.b2 = data["W1"], data["b1"], data["W2"], np.float32(data["b2"])
         r._ema = [data["eW1"], data["eb1"], data["eW2"], np.float32(data["eb2"])]
         r.mu, r.var = data["mu"], data["var"]

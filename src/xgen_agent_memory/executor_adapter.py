@@ -44,7 +44,8 @@ class SynapseVectorHandle:
 
     def _index_sync(self, doc_id: str, text: str, md: Dict[str, Any]) -> None:
         self._m.index(
-            doc_id, text,
+            doc_id,
+            text,
             title=str(md.get("title") or ""),
             kind=str(md.get("kind") or md.get("category") or "note"),
             tags=list(md.get("tags") or ()),
@@ -55,8 +56,9 @@ class SynapseVectorHandle:
             teacher_model=str(md.get("teacher_model") or ""),
         )
 
-    async def index(self, doc_id: str, text: str,
-                    metadata: Optional[Dict[str, Any]] = None) -> None:
+    async def index(
+        self, doc_id: str, text: str, metadata: Optional[Dict[str, Any]] = None
+    ) -> None:
         # Synapse ops are sync CPU; offload so the event loop keeps serving.
         await asyncio.to_thread(self._index_sync, doc_id, text, metadata or {})
 
@@ -65,17 +67,24 @@ class SynapseVectorHandle:
             for d in docs:
                 self._index_sync(d["id"], d.get("text") or "", d.get("metadata") or {})
             return len(docs)
+
         return await asyncio.to_thread(_do)
 
-    async def search(self, query: str, *, top_k: int = 8,
-                     score_threshold: float = 0.0) -> List[Dict[str, Any]]:
+    async def search(
+        self, query: str, *, top_k: int = 8, score_threshold: float = 0.0
+    ) -> List[Dict[str, Any]]:
         hits = await asyncio.to_thread(self._m.search, query, top_k=top_k)
         return [
             {
-                "id": h.id, "score": h.score, "title": h.title, "kind": h.kind,
-                "sources": h.sources, "query_token": h.query_token,
+                "id": h.id,
+                "score": h.score,
+                "title": h.title,
+                "kind": h.kind,
+                "sources": h.sources,
+                "query_token": h.query_token,
             }
-            for h in hits if h.score >= score_threshold
+            for h in hits
+            if h.score >= score_threshold
         ]
 
     async def remove(self, doc_id: str) -> None:
@@ -100,10 +109,12 @@ class SynapseRetriever:
     def __init__(self, memory: SynapseMemory) -> None:
         self._m = memory
 
-    async def retrieve(self, query: str, *, top_k: int = 8,
-                       kinds: Optional[Sequence[str]] = None) -> List[SearchHit]:
+    async def retrieve(
+        self, query: str, *, top_k: int = 8, kinds: Optional[Sequence[str]] = None
+    ) -> List[SearchHit]:
         return await asyncio.to_thread(self._m.search, query, top_k=top_k, kinds=kinds)
 
-    async def feedback(self, query_token: str, used_ids: Sequence[str],
-                       *, label_src: str = "implicit") -> Dict[str, float]:
+    async def feedback(
+        self, query_token: str, used_ids: Sequence[str], *, label_src: str = "implicit"
+    ) -> Dict[str, float]:
         return self._m.feedback(query_token, used_ids=used_ids, label_src=label_src)

@@ -33,8 +33,14 @@ _TAG_DF_CUTOFF = 0.30
 _TAG_DF_MIN_DOCS = 40
 
 
-def derive_tag_edges(tag_members: Dict[str, List[str]], n_docs: int, node_id: str,
-                     tags: Sequence[str], *, fanout: int = 6) -> List[Tuple[str, float]]:
+def derive_tag_edges(
+    tag_members: Dict[str, List[str]],
+    n_docs: int,
+    node_id: str,
+    tags: Sequence[str],
+    *,
+    fanout: int = 6,
+) -> List[Tuple[str, float]]:
     """IDF-weighted shared-tag edges from *node_id* to its tag-mates.
 
     *tag_members* is the engine's cached {tag: [node_ids]} map — passing it in
@@ -56,12 +62,18 @@ def derive_tag_edges(tag_members: Dict[str, List[str]], n_docs: int, node_id: st
         mates = [m for m in members if m != node_id][-fanout:]
         for m in mates:
             weights[m] = max(weights.get(m, 0.0), 0.5 * idf)
-    return sorted(weights.items(), key=lambda kv: -kv[1])[:fanout * 2]
+    return sorted(weights.items(), key=lambda kv: -kv[1])[: fanout * 2]
 
 
-def derive_knn_edges(query_vec, vectors: Dict[str, "object"], node_id: str,
-                     *, k: int = 6, min_sim: float = 0.25,
-                     sample_cap: int = 4096) -> List[Tuple[str, float]]:
+def derive_knn_edges(
+    query_vec,
+    vectors: Dict[str, "object"],
+    node_id: str,
+    *,
+    k: int = 6,
+    min_sim: float = 0.25,
+    sample_cap: int = 4096,
+) -> List[Tuple[str, float]]:
     """Semantic neighbours of a freshly indexed node (local embedding space).
 
     Scanning EVERY vector per index makes bulk indexing O(N²). KNN edges are a
@@ -89,8 +101,14 @@ def derive_knn_edges(query_vec, vectors: Dict[str, "object"], node_id: str,
 # ── Hebbian co-access ────────────────────────────────────────────────
 
 
-def reinforce_coaccess(store: Store, used_ids: Sequence[str], *, eta: float = 0.3,
-                       decay: float = 0.9, prune: float = 0.05) -> int:
+def reinforce_coaccess(
+    store: Store,
+    used_ids: Sequence[str],
+    *,
+    eta: float = 0.3,
+    decay: float = 0.9,
+    prune: float = 0.05,
+) -> int:
     """Strengthen COACCESS edges between every pair of *used* memories.
 
     Lazy decay: the stored weight is first decayed by elapsed weeks since its
@@ -100,7 +118,7 @@ def reinforce_coaccess(store: Store, used_ids: Sequence[str], *, eta: float = 0.
     updates: List[Tuple[str, str, int, float]] = []
     ids = list(dict.fromkeys(used_ids))
     for i, a in enumerate(ids):
-        for b in ids[i + 1:]:
+        for b in ids[i + 1 :]:
             for src, dst in ((a, b), (b, a)):
                 row = store.get_edge(src, dst, EDGE_COACCESS)
                 w = 0.0
@@ -193,8 +211,7 @@ def build_type_adjacency(
     negligible and no maintenance job ever runs)."""
     now = now or time.time()
     if etype == EDGE_COACCESS:
-        edges = [(s, d, w * (coaccess_decay ** max(0.0, (now - u) / _WEEK)))
-                 for s, d, w, u in rows]
+        edges = [(s, d, w * (coaccess_decay ** max(0.0, (now - u) / _WEEK))) for s, d, w, u in rows]
     elif etype == EDGE_LINK:
         # LINK is stored one-directional (what each node declares); treat it as
         # UNDIRECTED for propagation. Symmetrizing here — instead of persisting

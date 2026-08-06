@@ -37,6 +37,13 @@ packages = ["src/xgen_agent_memory"]
 line-length = 100
 target-version = "py310"
 
+# 규칙 집합을 고정한다. 안 고정하면 ruff 버전이 올라갈 때마다 새 규칙이 켜져
+# 게이트가 코드 변경 없이 빨개진다 (여기서도 UP/C4/BLE 등 244건이 그렇게 떴다).
+# 레이아웃은 포매터가 소유하므로 E501 은 제외.
+[tool.ruff.lint]
+select = ["E", "F"]
+ignore = ["E501"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

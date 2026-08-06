@@ -167,6 +167,7 @@ class SynapseConfig:
         (dim<0 → 'negative dimensions', vocab_size=0 → modulo-by-zero) or a
         silent NaN weight-poisoning (lr=inf) far downstream."""
         import math as _m
+
         if self.dim < 1:
             raise ValueError(f"dim must be ≥ 1, got {self.dim}")
         if self.vocab_size < 2:
