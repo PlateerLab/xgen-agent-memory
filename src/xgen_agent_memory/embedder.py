@@ -17,12 +17,68 @@ unless the new one actually correlates better with the teacher's geometry.
 
 from __future__ import annotations
 
+import hashlib
 import io
+import threading
 from typing import Any, Dict, List, Sequence, Tuple
 
 import numpy as np
 
 from .tokenizer import fnv1a_pair, tokenize
+
+
+# ── One table per process, not one per engine ────────────────────────
+#
+# The table is `vocab_size × dim × 4B` — 64 MB at the defaults — and a
+# host that keeps N sessions resident used to hold N copies of it.
+# Measured on production: an engine over an EMPTY vault still cost
+# 68 MB, and 6 live vaults held only TWO distinct tables between them.
+# That is 64 MB per session spent on identical bytes.
+#
+# Sharing is safe because the table is never written in place. It is
+# read (`table[ids]`) and, when distillation adopts a better one, the
+# whole HashEmbedder is REPLACED by a scratch instance holding its own
+# fresh array (see `SynapseMemory.distill`) — copy-on-write by
+# construction. `setflags(write=False)` turns any future in-place write
+# into an immediate error rather than silent cross-session corruption.
+#
+# Keys are content-determined: generated tables by their generator
+# arguments, loaded tables by the digest of the blob they came from.
+_TABLE_CACHE: Dict[Any, np.ndarray] = {}
+_TABLE_LOCK = threading.Lock()
+#: Realistically 1–2 distinct tables exist; the bound is a leak-stop,
+#: not a tuning knob. Oldest-first eviction (insertion-ordered dict).
+_TABLE_CACHE_MAX = 8
+
+
+def _shared_table(key: Any, build) -> np.ndarray:
+    """Return the process-wide table for *key*, building it once."""
+    with _TABLE_LOCK:
+        hit = _TABLE_CACHE.get(key)
+        if hit is not None:
+            return hit
+    # Build OUTSIDE the lock: generating 64 MB takes ~200ms and must not
+    # serialise every other engine's construction behind it. A duplicate
+    # build under a race costs one throwaway array, never correctness.
+    table = build()
+    table.setflags(write=False)
+    with _TABLE_LOCK:
+        existing = _TABLE_CACHE.get(key)
+        if existing is not None:
+            return existing
+        while len(_TABLE_CACHE) >= _TABLE_CACHE_MAX:
+            _TABLE_CACHE.pop(next(iter(_TABLE_CACHE)))
+        _TABLE_CACHE[key] = table
+    return table
+
+
+def shared_table_stats() -> Dict[str, Any]:
+    """What the process is holding — for host health endpoints."""
+    with _TABLE_LOCK:
+        return {
+            "tables": len(_TABLE_CACHE),
+            "bytes": sum(t.nbytes for t in _TABLE_CACHE.values()),
+        }
 
 
 class HashEmbedder:
@@ -35,16 +91,30 @@ class HashEmbedder:
         char_ngrams: Sequence[int] = (2, 3),
         jamo_ngrams: Sequence[int] = (3, 5),
         suffix_strip: bool = True,
+        table: "np.ndarray | None" = None,
     ) -> None:
         self.vocab_size = vocab_size
         self.dim = dim
         self.char_ngrams = tuple(char_ngrams)
         self.jamo_ngrams = tuple(jamo_ngrams)
         self.suffix_strip = suffix_strip
-        rng = np.random.default_rng(seed)
+
         # fp32 master table; persisted as fp16 to halve disk. Scaled so that
         # mean-pooled vectors have a sane norm pre-normalization.
-        self.table = (rng.standard_normal((vocab_size, dim)) / np.sqrt(dim)).astype(np.float32)
+        #
+        # Fully determined by (vocab_size, dim, seed) — so every engine
+        # built with the same three shares one array instead of minting
+        # its own 64 MB copy of identical numbers.
+        # `table=` skips generation for callers that already have the real
+        # one (`loads`). Without it every restore generated a 64 MB table
+        # only to throw it away on the next line.
+        def _build() -> np.ndarray:
+            rng = np.random.default_rng(seed)
+            return (rng.standard_normal((vocab_size, dim)) / np.sqrt(dim)).astype(np.float32)
+
+        self.table = (
+            table if table is not None else _shared_table(("gen", vocab_size, dim, seed), _build)
+        )
 
     # ── inference ────────────────────────────────────────────────────
     def bucket_ids(self, text: str, *, limit: int = 2048) -> np.ndarray:
@@ -212,16 +282,24 @@ class HashEmbedder:
     ) -> "HashEmbedder":
         data = np.load(io.BytesIO(blob))
         vocab_size, dim = (int(x) for x in data["meta"])
-        emb = cls(
+        # Two sessions that persisted the same table hold the same bytes,
+        # so the digest of the blob is the identity of the array it
+        # decodes to. Keying on it means the decode (and the 64 MB)
+        # happens once per distinct table, not once per session.
+        digest = hashlib.sha256(blob).digest()
+        table = _shared_table(
+            ("blob", digest),
+            lambda: data["table"].astype(np.float32),
+        )
+        return cls(
             vocab_size,
             dim,
             seed=seed,
             char_ngrams=char_ngrams,
             jamo_ngrams=jamo_ngrams,
             suffix_strip=suffix_strip,
+            table=table,
         )
-        emb.table = data["table"].astype(np.float32)
-        return emb
 
     def save(self, path: str) -> None:
         with open(path, "wb") as f:

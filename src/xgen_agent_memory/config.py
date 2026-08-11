@@ -87,6 +87,21 @@ class SynapseConfig:
     suffix_strip: bool = True
     #: Cross-space syllable bigrams (붙여쓰기 robustness) in the BM25 stream.
     cross_space: bool = True
+    #: Minimum length for a NON-Hangul word to also emit character 3-grams
+    #: into the BM25 stream. ``0`` (default) keeps them out of it entirely.
+    #:
+    #: They used to be unconditional and were 72.8% of a production vault's
+    #: postings — 59.6% of that from fifty boilerplate types (`execution`,
+    #: `screen`, `title`, `tags`, …) whose IDF is ~0, so they cost storage
+    #: and contributed nothing to ranking. With a real stemmer in place the
+    #: measured trade is: postings −64%, known-item MRR +4% verbatim /
+    #: +2% re-inflected, −12.5% on transposed-character typos. Typo
+    #: tolerance still lives in the EMBEDDING stream, which keeps them
+    #: (``embed_tokens`` does not take this knob) — the same split that
+    #: already keeps jamo out of BM25.
+    latin_ngram_min_len: int = 0
+    #: Porter stemming for Latin-script words. Additive (surface AND stem).
+    latin_stemming: bool = True
     #: BM25F-lite: title terms count this many times in the postings.
     title_boost: float = 2.0
     #: Per-document token cap (indexing) / per-query cap.

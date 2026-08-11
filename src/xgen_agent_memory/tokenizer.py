@@ -2,6 +2,10 @@
 
 LEXICAL stream (BM25 postings) — precision-oriented:
   * surface words (NFKC + casefold)
+  * Porter stems for Latin-script words (additive — surface AND stem). The
+    Latin side had no morphology at all; character trigrams stood in for it,
+    which cost 72.8% of a production vault's postings and still lost 22% of
+    MRR when a query was re-inflected off its source note.
   * guarded 조사-stripped stems (받침 agreement, ≥2-syllable stems; additive —
     surface AND stem are indexed, a wrong strip only adds one noisy term)
   * overlapping SYLLABLE BIGRAMS within each Hangul word — the no-analyzer
@@ -26,6 +30,7 @@ import re
 from typing import Iterable, List
 
 from .hangul import has_hangul, normalize, strip_suffix, to_jamo
+from .latin import stem as latin_stem
 
 _WORD = re.compile(r"[\w']+", re.UNICODE)
 
@@ -34,6 +39,11 @@ _STOP = {"the", "a", "an", "of", "to", "and", "is", "in", "it", "i", "you"}
 
 #: Marker prefix for jamo grams — never collides with syllable grams.
 _JAMO_MARK = "ⱼ"
+#: Minimum Latin word length for character trigrams in the EMBEDDING stream.
+#: The BM25 stream defaults to 0 (none); this side keeps them because it is
+#: where fuzzy matching belongs and it costs no postings.
+LATIN_NGRAM_EMBED = 4
+
 #: Marker for cross-space bigrams — kept distinct from in-word bigrams so
 #: their IDF is computed on their own distribution.
 _XSPACE_MARK = "ₓ"
@@ -80,6 +90,8 @@ def lexical_tokens(
     suffix_strip: bool = True,
     cross_space: bool = True,
     limit: int = 2048,
+    latin_ngram_min_len: int = 0,
+    latin_stemming: bool = True,
 ) -> List[str]:
     """BM25 stream: words + guarded stems + syllable bigrams + cross-space
     bigrams. See module docstring for the evidence behind each choice."""
@@ -112,7 +124,14 @@ def lexical_tokens(
             run.append(word)
         else:
             flush_run()
-            if len(word) > 3:
+            # Same additive contract as the Korean stripper above: surface
+            # AND stem, so an over-eager conflation costs one posting and
+            # never an exact match.
+            if latin_stemming:
+                st = latin_stem(word)
+                if st != word.lower():
+                    tokens.append(st)
+            if latin_ngram_min_len > 0 and len(word) >= latin_ngram_min_len:
                 tokens.extend(_ngrams(word, (3,)))
         if len(tokens) >= limit:
             break
@@ -129,8 +148,18 @@ def embed_tokens(
     limit: int = 2048,
 ) -> List[str]:
     """Embedding stream: the lexical stream + padded jamo n-grams."""
+    # Latin trigrams are asked for EXPLICITLY here, exactly as jamo is added
+    # below: this stream is the recall side and pays no posting cost. The
+    # BM25 default is 0, and inheriting that by omission would have moved
+    # fuzzy matching out of the engine entirely the first time someone read
+    # the signature and "tidied" it.
     tokens = lexical_tokens(
-        text, char_ngrams=char_ngrams, suffix_strip=suffix_strip, cross_space=False, limit=limit
+        text,
+        char_ngrams=char_ngrams,
+        suffix_strip=suffix_strip,
+        cross_space=False,
+        limit=limit,
+        latin_ngram_min_len=LATIN_NGRAM_EMBED,
     )
     jamo_sizes = tuple(jamo_ngrams)
     if jamo_sizes:

@@ -14,13 +14,15 @@ One SQLite file, numpy-only, zero API calls, microsecond learning updates.
 """
 
 from .config import SynapseConfig, load_dotenv
+from ._rwlock import MemoryBusy
 from .engine import SearchHit, SynapseMemory
 from .executor_adapter import SynapseRetriever, SynapseVectorHandle
 from .ranker import FEATURES
 
-__version__ = "1.7.0"
+__version__ = "1.6.0"
 
 __all__ = [
+    "MemoryBusy",
     "SynapseMemory",
     "SynapseConfig",
     "SearchHit",
