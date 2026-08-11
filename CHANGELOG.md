@@ -1,5 +1,161 @@
 # Changelog
 
+> 아래 1.8.0 ~ 1.11.0 은 `geny-memory-adaptor` 에서 이식했다. XGEN 은 Geny 에서
+> 갈라져 독자적으로 가는 프로젝트이지만, **같은 뿌리에서 온 결함은 여기에도
+> 그대로 있다.** 검증 방법(테스트)까지 함께 가져왔고, 이 저장소의 기존 코드와
+> 충돌하는 부분은 없었다 — 갈라진 이후의 차이는 전부 포매팅이었다.
+
+## [1.11.0] — 2026-08-11
+
+### Changed (one embedder table per process, not one per session)
+Measured on a production host: an engine opened over an **empty** vault still
+cost 68 MB of RSS, and six live vaults held only **two** distinct embedder
+tables between them. The table is `vocab_size × dim × 4B` — 64 MB at the
+defaults — so a host keeping ten sessions resident spent 640 MB on ten copies
+of identical numbers. That, not the stored memories, was what made "keep every
+session awake" expensive.
+
+The table is now shared process-wide, keyed on what determines its contents:
+the generator arguments for a fresh table, the digest of the persisted blob for
+a restored one.
+
+Sharing is safe because the table is never written in place — it is read, and
+distillation *replaces* the whole embedder with a scratch instance holding its
+own array. `setflags(write=False)` makes that structural rather than
+conventional: an in-place write now raises instead of silently corrupting every
+other session that shares the array.
+
+- `HashEmbedder(..., table=)` lets `loads()` skip generating a 64 MB table it
+  was about to throw away.
+- `shared_table_stats()` reports what the process holds, for host health
+  endpoints.
+- Cache is bounded (8 tables) so a content-keyed dict cannot leak.
+
+Measured against four real vaults in one process: **330.4 MB → 137.2 MB**, and
+the marginal cost of one more resident session falls from 64–87 MB to
+0–23 MB — now purely proportional to what that session actually remembers.
+
+## [1.10.0] — 2026-08-10
+
+### Added (a catalogue, so a browser can ask small questions)
+A vault browser asks in order: how much is there, what days, what is on this
+day, what does this note say. The host answered the first three by
+materialising the whole vault — 3.2 s and 4.8 MB of bodies held in memory to
+produce one count, because its only listing primitive walks every note. The
+index already holds exactly the metadata those questions need.
+
+- `catalog_counts(by="kind"|"day", kind=...)` — one GROUP BY, no bodies.
+- `catalog_page(day=, kind=, limit=, offset=)` — one page of note metadata,
+  filtered and paged in SQL rather than sliced after the fact.
+- `neighbourhood(node_ids, depth=, max_nodes=, max_edges=)` — the subgraph
+  around a selection, both bounds enforced and `truncated` reported. The
+  whole-vault snapshot it replaces was 5,384 nodes and 4.3 MB of JSON for a
+  single screen.
+- `Store.edges_touching(node_ids, limit=)` underneath it.
+
+## [1.9.3] — 2026-08-10
+
+### Fixed (the vault could no longer notice its own conversion)
+1.9.0 recorded the new geometry against rows that had been derived by the
+OLD tokenizer. From that moment the fingerprints matched, so 1.9.1 and 1.9.2
+— both correct in themselves — had nothing to compare against, and the
+production vault stayed on the old tokenization with every check reporting
+agreement.
+
+- `_GEOMETRY_VERSION` joins the fingerprint. Config fields cannot express
+  "the stemmer changed"; an explicit version can, and it is the lever for
+  every future change of meaning. Bumped to 2 for the Porter/trigram move,
+  so every vault re-derives exactly once.
+
+## [1.9.2] — 2026-08-10
+
+### Fixed (an unrecorded geometry counted as a matching one)
+1.9.1 recorded the geometry on open and cleared the digests when it changed
+— but skipped the clear when there was NO previous record, to avoid a mass
+re-index on upgrade. That is precisely the upgrade case: a vault written
+before the geometry was tracked was derived by some tokenization nobody can
+name. Production upgraded, recorded the new geometry against untouched rows,
+and re-indexed nothing.
+
+Unknown provenance now counts as stale. Derived data is rebuildable; a wrong
+assumption of freshness is not.
+
+## [1.9.1] — 2026-08-10
+
+### Fixed (a geometry change never reached the host)
+1.9.0 put the tokenizer's geometry into `content_sha`, which was necessary
+and not sufficient: the digest is only consulted for notes a HOST decides to
+offer, and a host that diffs on timestamps never offers an untouched note.
+The production upgrade re-indexed **nothing** — "0 indexed" — and the vault
+sat half-converted, its postings derived one way while queries were analysed
+another, with every signal saying it was in sync.
+
+- The geometry is now recorded in `params`. On open, a change clears every
+  row's `content_sha` (one UPDATE) so `manifest()` reports them as
+  "indexed, derived state unknown" — the signal a host can actually act on.
+- Reopening with the SAME geometry leaves the digests alone, so an ordinary
+  restart still costs nothing.
+
+## [1.9.0] — 2026-08-10
+
+### Added (Latin morphology — the stream that never had any)
+Korean got a guarded 조사/어미 stripper early. The Latin side never did:
+character trigrams over every non-Hangul word ≥4 chars stood in for it, so
+"browsing" and "browse" met because they share *brow, row, ows*, not because
+anything understood them.
+
+- `latin.py` — Porter's algorithm, deterministic and dictionary-free, on the
+  same ADDITIVE contract as the Korean stripper: the surface form is indexed
+  too, so an over-eager conflation costs one posting and never an exact
+  match.
+
+### Changed (trigrams move to the stream they belong in)
+Measured on a 5,347-note production vault, Latin trigrams were **72.8% of
+all postings** — 59.6% of that from fifty boilerplate types (`execution`,
+`screen`, `title`, `tags`, …) whose IDF is ~0, so they cost storage and
+contributed nothing to ranking.
+
+- `latin_ngram_min_len` defaults to `0`: out of BM25, exactly where jamo
+  already sits. `embed_tokens` asks for them explicitly, so fuzzy matching
+  stays in the recall stream at no posting cost.
+- Paired A/B on one frozen snapshot, old defaults vs new:
+  postings 1,221,979 → **442,609 (−64%)**; English known-item MRR
+  verbatim 0.583 → 0.579, **re-inflected 0.372 → 0.461 (+24%)**,
+  typo 0.411 → 0.419; Korean flat. MIRACL-ko floor unchanged and passing.
+- `eval/known_item.py` — known-item retrieval over a real vault with
+  verbatim / re-inflected / typo query flavours, reported per language.
+  Gold is known by construction, so no judgements are needed and the actual
+  corpus can be used.
+
+### Fixed (a tokenizer change left a half-converted index)
+`content_sha` covered the embedding geometry but not the tokenizer's. Flip
+`latin_stemming` or `char_ngrams` and the digest said "unchanged": nothing
+re-indexed, and the stored postings quietly stopped agreeing with how
+queries were analysed. Tokenizer settings are now part of the digest, so a
+change invalidates exactly the rows it should.
+
+## [1.8.0] — 2026-08-09
+
+### Changed (read/write lock, and a bound on waiting for it)
+One mutex guarded everything, so every search queued behind every index —
+15.9 ms idle vs 63.6 ms during indexing on a production vault.
+
+- Readers now run together; writers stay exclusive. FAIR (arrival order),
+  not writer-preferring: the first cut preferred writers, and against a
+  continuous indexing load the writer re-queued the instant it released, so
+  searches never got a turn and the benchmark never finished. Both
+  starvation directions are now covered by tests.
+- `search(timeout=)`, default `SEARCH_TIMEOUT_S = 20 s`, raising the new
+  `MemoryBusy`. This — not the lock split — is what bounds a WEDGED write:
+  an exclusive writer that never returns still blocks readers, so the only
+  remedy is to stop waiting. A caller that can answer without memory should;
+  one that cannot passes `timeout=None`.
+- The lock is NOT reentrant, unlike the `RLock` it replaces. Two call paths
+  self-deadlocked the moment it was swapped (`feedback`/`learn` →
+  `trust_feedback`, and `contradictions` → `get_text`); both are now split
+  into a locked entry point and an unlocked internal. Lazy cache builders
+  nest, so their build mutex stays reentrant on purpose.
+
 ## [1.6.0] — 2026-07-30
 
 ### Changed (postings storage: integer keys — 6.4× smaller vaults)
